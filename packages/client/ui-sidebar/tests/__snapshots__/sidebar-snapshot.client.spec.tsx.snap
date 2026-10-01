@@ -63,9 +63,13 @@ exports[`sidebar shell snapshots > renders Windows caption controls in expanded 
       class="regionArea"
     >
       <div
-        data-slot="sidebar.workspaces"
-        style="display: contents;"
-      />
+        class="assistantBrowser"
+      >
+        <div
+          data-slot="sidebar.workspaces"
+          style="display: contents;"
+        />
+      </div>
     </div>
     <div
       class="footArea"
@@ -206,9 +210,69 @@ exports[`sidebar shell snapshots > renders Windows caption controls in expanded 
       class="regionArea"
     >
       <div
-        data-slot="sidebar.workspaces"
-        style="display: contents;"
-      />
+        class="root assistantHeader"
+      >
+        <div
+          aria-expanded="false"
+          class="row assistantToggle"
+          data-disclosure-row="true"
+          data-expandable="true"
+          role="button"
+          tabindex="0"
+        >
+          <span
+            class="leading"
+          >
+            <span
+              class="iconIdle"
+            >
+              <svg
+                aria-hidden="true"
+                data-content="964807f4"
+                fill="none"
+                height="16"
+                stroke-width="1"
+                viewBox="0 0 16 16"
+                width="16"
+                xmlns="http://www.w3.org/2000/svg"
+              />
+            </span>
+            <svg
+              aria-hidden="true"
+              class="chevronHover"
+              data-content="2b5d7fd1"
+              fill="none"
+              height="14"
+              stroke-width="1"
+              viewBox="0 0 16 16"
+              width="14"
+              xmlns="http://www.w3.org/2000/svg"
+            />
+          </span>
+          <span
+            class="root"
+          >
+            <span
+              class="content"
+            >
+              <span
+                class="text title"
+              >
+                Research assistant
+              </span>
+            </span>
+          </span>
+        </div>
+      </div>
+      <div
+        class="assistantBrowser"
+        hidden=""
+      >
+        <div
+          data-slot="sidebar.workspaces"
+          style="display: contents;"
+        />
+      </div>
     </div>
     <div
       class="footArea"
@@ -315,9 +379,13 @@ exports[`sidebar shell snapshots > renders the collapsed rail after the crossfad
       class="regionArea"
     >
       <div
-        data-slot="sidebar.workspaces"
-        style="display: contents;"
-      />
+        class="assistantBrowser"
+      >
+        <div
+          data-slot="sidebar.workspaces"
+          style="display: contents;"
+        />
+      </div>
     </div>
     <div
       class="footArea"
@@ -458,9 +526,69 @@ exports[`sidebar shell snapshots > renders the expanded column (wordmark, capsul
       class="regionArea"
     >
       <div
-        data-slot="sidebar.workspaces"
-        style="display: contents;"
-      />
+        class="root assistantHeader"
+      >
+        <div
+          aria-expanded="false"
+          class="row assistantToggle"
+          data-disclosure-row="true"
+          data-expandable="true"
+          role="button"
+          tabindex="0"
+        >
+          <span
+            class="leading"
+          >
+            <span
+              class="iconIdle"
+            >
+              <svg
+                aria-hidden="true"
+                data-content="964807f4"
+                fill="none"
+                height="16"
+                stroke-width="1"
+                viewBox="0 0 16 16"
+                width="16"
+                xmlns="http://www.w3.org/2000/svg"
+              />
+            </span>
+            <svg
+              aria-hidden="true"
+              class="chevronHover"
+              data-content="2b5d7fd1"
+              fill="none"
+              height="14"
+              stroke-width="1"
+              viewBox="0 0 16 16"
+              width="14"
+              xmlns="http://www.w3.org/2000/svg"
+            />
+          </span>
+          <span
+            class="root"
+          >
+            <span
+              class="content"
+            >
+              <span
+                class="text title"
+              >
+                Research assistant
+              </span>
+            </span>
+          </span>
+        </div>
+      </div>
+      <div
+        class="assistantBrowser"
+        hidden=""
+      >
+        <div
+          data-slot="sidebar.workspaces"
+          style="display: contents;"
+        />
+      </div>
     </div>
     <div
       class="footArea"
@@ -601,9 +729,69 @@ exports[`sidebar shell snapshots > renders the expanded column in the default lo
       class="regionArea"
     >
       <div
-        data-slot="sidebar.workspaces"
-        style="display: contents;"
-      />
+        class="root assistantHeader"
+      >
+        <div
+          aria-expanded="false"
+          class="row assistantToggle"
+          data-disclosure-row="true"
+          data-expandable="true"
+          role="button"
+          tabindex="0"
+        >
+          <span
+            class="leading"
+          >
+            <span
+              class="iconIdle"
+            >
+              <svg
+                aria-hidden="true"
+                data-content="964807f4"
+                fill="none"
+                height="16"
+                stroke-width="1"
+                viewBox="0 0 16 16"
+                width="16"
+                xmlns="http://www.w3.org/2000/svg"
+              />
+            </span>
+            <svg
+              aria-hidden="true"
+              class="chevronHover"
+              data-content="2b5d7fd1"
+              fill="none"
+              height="14"
+              stroke-width="1"
+              viewBox="0 0 16 16"
+              width="14"
+              xmlns="http://www.w3.org/2000/svg"
+            />
+          </span>
+          <span
+            class="root"
+          >
+            <span
+              class="content"
+            >
+              <span
+                class="text title"
+              >
+                研究助手
+              </span>
+            </span>
+          </span>
+        </div>
+      </div>
+      <div
+        class="assistantBrowser"
+        hidden=""
+      >
+        <div
+          data-slot="sidebar.workspaces"
+          style="display: contents;"
+        />
+      </div>
     </div>
     <div
       class="footArea"

@@ -16,10 +16,11 @@
  * scrollbar indirection away while it is elsewhere, so a list the user is not
  * pointing at carries no bar.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
-  FishLogo, IconNewChatOutlineMedium, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular, isDarwinDesktop, ShortcutKeys, Tooltip,
+  DisclosureRow, FishLogo, IconFolderOpenOutlineRegular, IconNewChatOutlineMedium, IconNewChatOutlineRegular,
+  IconPanelLeftOutlineRegular, isDarwinDesktop, ShortcutKeys, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -37,6 +38,8 @@ const COLLAPSE_SETTLE_MS = 150
  * edge — on the way to the conversation, or around a portalled menu.
  */
 const SCROLLBAR_LINGER_MS = 2000
+
+const ASSISTANT_ICON = <IconFolderOpenOutlineRegular size={16} />
 
 /** Format complete-build metadata for the local brand badge. */
 function localBuildVersion(): string | undefined {
@@ -98,6 +101,9 @@ export function SidebarRoot({
   renderSlot,
 }: SidebarRootComponentProps) {
   const panels = usePanels(snapshot => snapshot)
+  const homePanel = panels[0]
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const toggleAssistant = useCallback(() => { setAssistantOpen(open => !open) }, [])
   const shortcut = useShortcuts(rows => rows.find(row => row.id === 'sidebar.left.toggle'))
   const newShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
   const toggleLabel = collapsed ? t('toggle.open') : t('toggle.collapse')
@@ -214,8 +220,8 @@ export function SidebarRoot({
           traffic lights and keeps the toggle at the sidebar's top-right. */}
       {darwinDesktop && <div className={css.topStrip} data-window-drag>{toggle}</div>}
       <div className={css.logoRow} data-window-drag>
-        {/* Expanded, the brand doubles as a New Session shortcut — except on
-            macOS, where it stays part of the logo row's window-drag surface
+        {/* Expanded, the brand opens the first global panel, or a new session
+            when no panel exists. On macOS it remains a window-drag surface
             (a button would subtract itself through the global no-drag rule);
             the collapsed rail's logo is the expand toggle below instead. */}
         {wide && (() => {
@@ -244,9 +250,9 @@ export function SidebarRoot({
               <button
                 type="button"
                 className={clsx(css.brand, css.wide)}
-                aria-label={t('session.new.label')}
-                aria-keyshortcuts={newShortcut?.aria}
-                onClick={() => { startSession() }}
+                aria-label={homePanel === undefined ? t('session.new.label') : t('panels.home')}
+                aria-keyshortcuts={homePanel === undefined ? newShortcut?.aria : undefined}
+                onClick={() => { if (homePanel === undefined) startSession(); else selectPanel(homePanel.id) }}
               >
                 {identity}
               </button>
@@ -254,6 +260,22 @@ export function SidebarRoot({
         })()}
         {!darwinDesktop && toggle}
       </div>
+
+      {panels.length > 0 && (
+        <nav className={css.panelList} aria-label={t('panels.label')}>
+          {panels.map(({ id, label }) => (
+            <PanelRow
+              key={id}
+              id={id}
+              label={label}
+              wide={wide}
+              usePanelInfo={usePanelInfo}
+              selectPanel={selectPanel}
+              renderSlot={renderSlot}
+            />
+          ))}
+        </nav>
+      )}
 
       {/* The label fades before the hover/focus shortcut, including on translucent backgrounds. */}
       <Tooltip label={t('session.new.label')} shortcutKeys={newShortcut?.keys} delayMs={500} side={captionTooltipSide} disabled={wide}>
@@ -276,29 +298,32 @@ export function SidebarRoot({
         </button>
       </Tooltip>
 
-      {panels.length > 0 && (
-        <nav className={css.panelList} aria-label={t('panels.label')}>
-          {panels.map(({ id, label }) => (
-            <PanelRow
-              key={id}
-              id={id}
-              label={label}
-              wide={wide}
-              usePanelInfo={usePanelInfo}
-              selectPanel={selectPanel}
-              renderSlot={renderSlot}
-            />
-          ))}
-        </nav>
-      )}
-
-      {/* The browsing region fills the column between the controls and the
-          foot in both states; its rail icon column rides the same slot. */}
+      {/* Keep the browser mounted while folded so its state and shortcut
+          requests survive; the rail still exposes its normal controls. */}
       <div className={css.regionArea}>
-        {renderSlot('sidebar.workspaces', {
-          wide,
-          expandSidebar: () => { if (collapsed) toggleSidebar() },
-        })}
+        {wide && <DisclosureRow
+          className={css.assistantHeader}
+          rowClassName={css.assistantToggle}
+          icon={ASSISTANT_ICON}
+          title={t('assistant.label')}
+          open={assistantOpen}
+          expandable
+          expandOnRowClick
+          onToggle={toggleAssistant}
+        />}
+        <div
+          className={css.assistantBrowser}
+          hidden={wide && !assistantOpen}
+          onFocusCapture={() => { if (wide) setAssistantOpen(true) }}
+        >
+          {renderSlot('sidebar.workspaces', {
+            wide: wide && assistantOpen,
+            expandSidebar: () => {
+              setAssistantOpen(true)
+              if (collapsed) toggleSidebar()
+            },
+          })}
+        </div>
       </div>
 
       {/* Footer actions stack above Settings in both sidebar widths. */}

@@ -183,6 +183,24 @@ describe('sidebar global panels', () => {
     expect(within(navigation).getAllByRole('button').map(row => row.textContent)).toEqual(['Alpha panel', 'Beta panel'])
   })
 
+  it('places global panels before New Session and makes the brand open the first ordered panel', async () => {
+    const { runtime, locale, layout, view } = await bench()
+    const { beta } = await mountPanels(runtime, locale, -100)
+    const navigation = await view.findByRole('navigation', { name: 'Global panels' })
+    const newSession = view.getByRole('button', { name: 'New session' })
+    expect(navigation.compareDocumentPosition(newSession) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    const home = view.getByRole('button', { name: 'Open main panel' })
+    expect(home.getAttribute('aria-keyshortcuts')).toBeNull()
+    fireEvent.click(home)
+    expect(layout.selectPanel).toHaveBeenLastCalledWith(BETA)
+    expect(view.getByRole('heading', { name: 'Beta content' })).toBeTruthy()
+    await beta.dispose()
+    await waitFor(() => { expect(within(navigation).queryByRole('button', { name: 'Beta panel' })).toBeNull() })
+    fireEvent.click(home)
+    expect(layout.selectPanel).toHaveBeenLastCalledWith(ALPHA)
+    expect(view.getByRole('heading', { name: 'Alpha content' })).toBeTruthy()
+  })
+
   it('selects registered main content and keeps a repeated selection active', async () => {
     const { runtime, locale, layout, view } = await bench()
     await mountPanels(runtime, locale)

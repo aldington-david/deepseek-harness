@@ -68,7 +68,7 @@ export interface DesktopUpdatePresentation {
   readonly failure?: DesktopUpdateFailureKind
 }
 
-/** Product documents cannot supply update versions, package URLs, or installation authorization. */
+/** Native product operations; this fork exposes no application self-update capability. */
 export interface DshDesktopProductApi {
   readonly protocolVersion: 1
   readonly browser: DesktopBrowserBridge
@@ -79,11 +79,6 @@ export interface DshDesktopProductApi {
    * @returns `name=value` fields separated by `; `, with no hostname, user name, or serial number.
    */
   deviceInfo(): Promise<string>
-  readonly updates: {
-    status(): Promise<DesktopUpdatePresentation>
-    open(): Promise<void>
-    subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void
-  }
 }
 
 /** Scheme of Desktop-owned application documents. */

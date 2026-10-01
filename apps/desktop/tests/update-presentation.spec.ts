@@ -1,13 +1,7 @@
 import { expect, it } from 'vitest'
 import { desktopUpdateErrorSummary, presentDesktopUpdate } from '../src/update-presentation.ts'
 import { en, zh } from '../src/locale.ts'
-import type { DesktopUpdateState, DshDesktopProductApi } from '../src/ipc.ts'
-import type { DesktopUpdateBridge } from '@deepseek-ai/dsh-client-ui-settings-general/types'
-
-it('keeps the Electron preload assignable to the product consumer', () => {
-  const assign = (bridge: DshDesktopProductApi['updates']): DesktopUpdateBridge => bridge
-  expect(assign).toBeTypeOf('function')
-})
+import type { DesktopUpdateState } from '../src/ipc.ts'
 
 it('records visible ordinary-update states without authorizing downloads or installation', async () => {
   const phases: DesktopUpdateState['phase'][] = ['idle', 'available', 'downloading', 'verifying', 'ready', 'installing', 'error']

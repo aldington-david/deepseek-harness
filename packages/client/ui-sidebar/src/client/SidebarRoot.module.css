@@ -242,7 +242,7 @@
 
 /* Brand group (figma I133:7632): the full wordmark rides the text ink
    (figma flows: the main-screen instance is black; blue is brand
-   emphasis only). A button only in behavior (New Session shortcut): the
+   emphasis only). A button only in behavior (home navigation): the
    pointer cursor is the sole affordance — no hover chrome on the mark. */
 .brand {
   flex: 1;
@@ -568,6 +568,38 @@
   margin-left: 0;
   margin-right: 0;
   padding-left: 0;
+}
+
+.assistantHeader {
+  flex: none;
+  width: auto;
+  margin: 0 var(--dsh-sidebar-inline-padding) 8px 2px;
+}
+
+.assistantToggle {
+  padding: 4px 8px;
+  border-radius: var(--dsw-radius-sm);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.assistantToggle:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.assistantToggle:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+
+.assistantBrowser {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.assistantBrowser[hidden] {
+  display: none;
 }
 
 /* Footer seats: additive actions stack above Settings. Each occupant owns its

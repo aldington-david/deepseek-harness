@@ -3,7 +3,7 @@ import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ShortcutCatalogEntry, ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import type { ReactNode } from 'react'
 import type {
@@ -35,10 +35,11 @@ type AttentionSnapshot = Parameters<Parameters<SidebarRootComponentProps['useSes
 const noAttention: AttentionSnapshot = new Map()
 const useSessionStatus: SidebarRootComponentProps['useSessionStatus'] = selector => selector(noAttention)
 
-function mountShell({ collapsed = false, width = 300, shortcuts = [] }: {
+function mountShell({ collapsed = false, width = 300, shortcuts = [], workspacePortal = false }: {
   collapsed?: boolean
   width?: number
   shortcuts?: readonly ShortcutCatalogEntry[]
+  workspacePortal?: boolean
 } = {}) {
   const startSession = vi.fn()
   const toggleSidebar = vi.fn()
@@ -71,7 +72,11 @@ function mountShell({ collapsed = false, width = 300, shortcuts = [] }: {
           return <div data-testid="footer-action-seat" data-wide={owner.wide} />
         }
         regionOwner = owner as SidebarSectionOwnerProps
-        return <div data-testid="region" data-wide={owner.wide} />
+        return <div data-testid="region" data-wide={owner.wide}>
+          {workspacePortal && <Modal open headless title="Workspace picker" onClose={() => {}}>
+            <button type="button">Workspace picker action</button>
+          </Modal>}
+        </div>
       }) as SidebarRootComponentProps['renderSlot']}
     />
   )
@@ -186,20 +191,48 @@ describe('SidebarRoot shell', () => {
     expect(screen.getByText('DSH Local Build')).toBeTruthy()
   })
 
-  it('hands the region its wide flag and clamps expandSidebar to the collapsed state', () => {
+  it('starts the research assistant folded and keeps its browser mounted while toggling', () => {
     const b = mountShell()
+    const disclosure = screen.getByRole('button', { name: 'Research assistant' })
+    const region = screen.getByTestId('region')
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+    expect(region.parentElement?.hidden).toBe(true)
+    expect(b.regionOwner().wide).toBe(false)
+    fireEvent.click(disclosure)
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+    expect(region.parentElement?.hidden).toBe(false)
     expect(b.regionOwner().wide).toBe(true)
+    fireEvent.keyDown(disclosure, { key: ' ' })
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+    expect(region.parentElement?.hidden).toBe(true)
+    fireEvent.keyDown(disclosure, { key: 'Enter' })
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByTestId('region')).toBe(region)
+  })
+
+  it('reveals a folded browser on its request without collapsing the sidebar', () => {
+    const b = mountShell()
     // The settings seat rides the same wide flag (ui-settings renders the row).
     expect(b.settingsOwner().wide).toBe(true)
     expect(b.footerActionOwner().wide).toBe(true)
-    // Expanded: the request is a no-op (no accidental collapse).
-    b.regionOwner().expandSidebar()
+    act(() => { b.regionOwner().expandSidebar() })
+    expect(b.regionOwner().wide).toBe(true)
+    expect(screen.getByRole('button', { name: 'Research assistant' }).getAttribute('aria-expanded')).toBe('true')
     expect(b.toggleSidebar).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('reveals focused workspace portals only in the expanded sidebar (collapsed=%s)', (collapsed) => {
+    const b = mountShell({ collapsed, workspacePortal: true })
+    act(() => { screen.getByRole('button', { name: 'Workspace picker action' }).focus() })
+    expect(b.regionOwner().wide).toBe(!collapsed)
+    expect(b.toggleSidebar).not.toHaveBeenCalled()
+    if (!collapsed) expect(screen.getByRole('button', { name: 'Research assistant' }).getAttribute('aria-expanded')).toBe('true')
   })
 
   it('keeps the region mounted through collapse and expands on its request', () => {
     vi.useFakeTimers()
     const b = mountShell()
+    fireEvent.click(screen.getByRole('button', { name: 'Research assistant' }))
     b.rerender({ collapsed: true })
     // Wide content survives the crossfade window, then settles into the rail.
     expect(b.regionOwner().wide).toBe(true)
@@ -208,7 +241,7 @@ describe('SidebarRoot shell', () => {
     expect(b.regionOwner().wide).toBe(false)
     expect(b.footerActionOwner().wide).toBe(false)
     expect(screen.getByTestId('region')).toBeTruthy()
-    b.regionOwner().expandSidebar()
+    act(() => { b.regionOwner().expandSidebar() })
     expect(b.toggleSidebar).toHaveBeenCalledOnce()
   })
 
@@ -216,6 +249,12 @@ describe('SidebarRoot shell', () => {
     const b = mountShell({ collapsed: true })
     expect(b.regionOwner().wide).toBe(false)
     expect(screen.getByRole('button', { name: 'Open sidebar' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Research assistant' })).toBeNull()
+    expect(screen.getByTestId('region').parentElement?.hidden).toBe(false)
+    act(() => { b.regionOwner().expandSidebar() })
+    b.rerender({ collapsed: false })
+    expect(b.regionOwner().wide).toBe(true)
+    expect(screen.getByRole('button', { name: 'Research assistant' }).getAttribute('aria-expanded')).toBe('true')
   })
 
   it('shows only the badge bubble while the rail badge is hovered inside the toggle', () => {
