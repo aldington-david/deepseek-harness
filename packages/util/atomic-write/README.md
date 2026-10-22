@@ -38,6 +38,8 @@ await writeFileAtomic('/home/u/.dsh/cordis.patch.yml', text, { mode: 0o600 })
 
 Parent directories are created as needed, and readers observe either the old or the new complete content. On Windows, transient replacement interference reported as `EACCES`, `EBUSY`, or `EPERM` is retried for a bounded interval; any remaining failure removes the temporary file and leaves the target untouched.
 
+Use `renameAtomicTemp(temp, filename)` when the writer already owns a complete, closed temporary file beside the target, as the JSON storage backend does after fsync. This function shares the Windows retry behavior without writing or syncing files. A successful rename consumes the temporary path; after a rejected rename, the caller owns temporary-file cleanup.
+
 ### Coordinating writers
 
 For a read-render-commit cycle that a bare atomic commit cannot make safe on its own, hold the writer lock around the operation:
@@ -76,7 +78,7 @@ The package is built on one separation: the atomic commit owns the swap, and the
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `writeFileAtomic` and `withFileLock`, the package's whole surface |
+| [`src/index.ts`](src/index.ts) | Whole-file writes, prepared-temp replacement, and cross-process writer locks |
 | — | No runtime invariant companion is published; this pure filesystem primitive owns no event stream or mutable runtime data; its replacement contract is enforced by unit tests. |
 
 ### Write path

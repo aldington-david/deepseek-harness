@@ -18,8 +18,8 @@
   en: 9cc27a0ee5ae0808
   zh: d0ee06b54452f600
 /deepseek-ai-dsh-atomic-write/use-this-package/writing-a-file-atomically:
-  en: 7b757dc3c3b27335
-  zh: a097d90a2561475d
+  en: 7950dc93689846d1
+  zh: 05d718bc44638ef8
 /deepseek-ai-dsh-atomic-write/use-this-package/coordinating-writers:
   en: 77c865c1f78d2a0c
   zh: 5a91874c352c6f18
@@ -30,8 +30,8 @@
   en: 93b537308f7c88c7
   zh: 282e0d2042aeb1be
 /deepseek-ai-dsh-atomic-write/understand-the-implementation/source-map:
-  en: 725509a8b621c668
-  zh: c11e3ffdf73af844
+  en: 8275fddc57164e76
+  zh: 354ccdc7d67f6685
 /deepseek-ai-dsh-atomic-write/understand-the-implementation/write-path:
   en: 2e6561c9282f0c0d
   zh: 7f0e76f6dbdea501

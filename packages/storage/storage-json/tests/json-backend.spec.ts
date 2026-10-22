@@ -80,6 +80,7 @@ describe('json backend specifics', () => {
     await backend.close()
   })
 
+  // Four persistent Windows denials each exhaust the bounded rename retry window.
   it('rolls back memory when a publish fails', async () => {
     const root = await freshRoot()
     const backend = new JsonStorageBackend(root)
@@ -105,7 +106,7 @@ describe('json backend specifics', () => {
     const text = await readFile(path, 'utf8')
     expect(text).not.toContain('rejected')
     await backend.close()
-  })
+  }, 10_000)
 
   it('rejects undeclared table and global access as caller errors', async () => {
     const root = await freshRoot()

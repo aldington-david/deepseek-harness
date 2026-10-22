@@ -38,6 +38,8 @@ await writeFileAtomic('/home/u/.dsh/cordis.patch.yml', text, { mode: 0o600 })
 
 父目录会按需创建，读取方只会观察到旧内容或完整的新内容。在 Windows 上，报告为 `EACCES`、`EBUSY` 或 `EPERM` 的瞬时替换干扰会在有界时间内重试；任何剩余失败都会移除临时文件，并保持目标文件不变。
 
+如果写入方已在目标旁准备好完整且已关闭的临时文件，可使用 `renameAtomicTemp(temp, filename)`；JSON 存储后端在 fsync 后就采用此方式。该函数复用 Windows 重试行为，但不写入或同步文件。rename 成功后临时路径消失；rename 失败后，由调用方清理临时文件。
+
 ### 协调写入方
 
 对于单靠原子提交无法保证安全的读-渲染-提交循环，请在操作期间持有写锁：
@@ -76,7 +78,7 @@ Windows 在无法观察到锁时会对 `EPERM` 重试一次，因为持锁方可
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `writeFileAtomic` 与 `withFileLock`，即本包的全部接口 |
+| [`src/index.ts`](src/index.ts) | 整文件写入、已准备临时文件的替换，以及跨进程写锁 |
 | — | 不发布运行时不变式伴生入口；这个纯文件系统原语不维护事件流或可变运行时数据；其替换约定由单元测试覆盖。 |
 
 ### 写入路径
