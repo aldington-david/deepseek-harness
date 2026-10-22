@@ -210,63 +210,7 @@ exports[`sidebar shell snapshots > renders Windows caption controls in expanded 
       class="regionArea"
     >
       <div
-        class="root assistantHeader"
-      >
-        <div
-          aria-expanded="false"
-          class="row assistantToggle"
-          data-disclosure-row="true"
-          data-expandable="true"
-          role="button"
-          tabindex="0"
-        >
-          <span
-            class="leading"
-          >
-            <span
-              class="iconIdle"
-            >
-              <svg
-                aria-hidden="true"
-                data-content="964807f4"
-                fill="none"
-                height="16"
-                stroke-width="1"
-                viewBox="0 0 16 16"
-                width="16"
-                xmlns="http://www.w3.org/2000/svg"
-              />
-            </span>
-            <svg
-              aria-hidden="true"
-              class="chevronHover"
-              data-content="2b5d7fd1"
-              fill="none"
-              height="14"
-              stroke-width="1"
-              viewBox="0 0 16 16"
-              width="14"
-              xmlns="http://www.w3.org/2000/svg"
-            />
-          </span>
-          <span
-            class="root"
-          >
-            <span
-              class="content"
-            >
-              <span
-                class="text title"
-              >
-                Research assistant
-              </span>
-            </span>
-          </span>
-        </div>
-      </div>
-      <div
         class="assistantBrowser"
-        hidden=""
       >
         <div
           data-slot="sidebar.workspaces"
@@ -526,63 +470,7 @@ exports[`sidebar shell snapshots > renders the expanded column (wordmark, capsul
       class="regionArea"
     >
       <div
-        class="root assistantHeader"
-      >
-        <div
-          aria-expanded="false"
-          class="row assistantToggle"
-          data-disclosure-row="true"
-          data-expandable="true"
-          role="button"
-          tabindex="0"
-        >
-          <span
-            class="leading"
-          >
-            <span
-              class="iconIdle"
-            >
-              <svg
-                aria-hidden="true"
-                data-content="964807f4"
-                fill="none"
-                height="16"
-                stroke-width="1"
-                viewBox="0 0 16 16"
-                width="16"
-                xmlns="http://www.w3.org/2000/svg"
-              />
-            </span>
-            <svg
-              aria-hidden="true"
-              class="chevronHover"
-              data-content="2b5d7fd1"
-              fill="none"
-              height="14"
-              stroke-width="1"
-              viewBox="0 0 16 16"
-              width="14"
-              xmlns="http://www.w3.org/2000/svg"
-            />
-          </span>
-          <span
-            class="root"
-          >
-            <span
-              class="content"
-            >
-              <span
-                class="text title"
-              >
-                Research assistant
-              </span>
-            </span>
-          </span>
-        </div>
-      </div>
-      <div
         class="assistantBrowser"
-        hidden=""
       >
         <div
           data-slot="sidebar.workspaces"
@@ -729,6 +617,153 @@ exports[`sidebar shell snapshots > renders the expanded column in the default lo
       class="regionArea"
     >
       <div
+        class="assistantBrowser"
+      >
+        <div
+          data-slot="sidebar.workspaces"
+          style="display: contents;"
+        />
+      </div>
+    </div>
+    <div
+      class="footArea"
+    >
+      <div
+        class="footerActions"
+      >
+        <div
+          data-slot="sidebar.footer.action"
+          style="display: contents;"
+        />
+      </div>
+      <div
+        class="settingsArea"
+      >
+        <div
+          data-slot="sidebar.settings"
+          style="display: contents;"
+        />
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`sidebar shell snapshots > renders the panel-first research assistant initially folded 1`] = `
+<div
+  data-slot="sidebar"
+  style="display: contents;"
+>
+  <div
+    class="root quietBars"
+    style="width: 300px;"
+  >
+    <div
+      class="logoRow"
+      data-window-drag="true"
+    >
+      <button
+        aria-label="New session"
+        class="brand wide"
+        type="button"
+      >
+        <span
+          aria-hidden="true"
+          class="brandIdentity"
+        >
+          <span
+            class="brandMark"
+          >
+            <div
+              data-slot="sidebar.brand.mark"
+              style="display: contents;"
+            >
+              <svg
+                aria-hidden="true"
+                data-content="965fe321"
+                fill="none"
+                height="17.6580310880829"
+                viewBox="0 0 23.16 17.04"
+                width="24"
+              />
+            </div>
+          </span>
+          <span
+            class="brandName"
+          >
+            <div
+              data-slot="sidebar.brand.name"
+              style="display: contents;"
+            >
+              <span
+                class="localBuildBrand"
+              >
+                <span
+                  class="localBuildTitle"
+                >
+                  DSH Local Build
+                </span>
+                <span
+                  class="buildVersion"
+                >
+                  1.2.3-rc.4-abc1234-dirty
+                </span>
+              </span>
+            </div>
+          </span>
+        </span>
+      </button>
+      <button
+        aria-label="Collapse sidebar"
+        class="iconButton toggle"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="panelIcon"
+          data-content="88020f34"
+          fill="none"
+          height="16"
+          stroke-width="1"
+          viewBox="0 0 16 16"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        />
+      </button>
+    </div>
+    <button
+      aria-label="New session"
+      class="newSession"
+      type="button"
+    >
+      <span
+        class="newSessionLabelMask"
+      >
+        <span
+          class="newSessionContent"
+        >
+          <svg
+            aria-hidden="true"
+            data-content="47b5e433"
+            fill="none"
+            height="14"
+            stroke-width="1.3"
+            viewBox="0 0 16 16"
+            width="14"
+            xmlns="http://www.w3.org/2000/svg"
+          />
+          <span
+            class="newSessionLabel wide"
+          >
+            New Session
+          </span>
+        </span>
+      </span>
+    </button>
+    <div
+      class="regionArea"
+    >
+      <div
         class="root assistantHeader"
       >
         <div
@@ -777,7 +812,7 @@ exports[`sidebar shell snapshots > renders the expanded column in the default lo
               <span
                 class="text title"
               >
-                研究助手
+                Research assistant
               </span>
             </span>
           </span>

@@ -16,6 +16,7 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import { apply, inject } from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type { Config } from '../src/navigation-config.ts'
 
 // The service reads its initial locale from the browser; these specs assert
 // the shipped Chinese copy, so they state the browser they assume.
@@ -30,6 +31,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 /**
@@ -38,7 +40,8 @@ afterEach(() => {
  * what an untouched client shows; `locale: 'en'` pins the en copy instead.
  * The installed face backs the entry's standard `t` seat either way.
  */
-async function bench(options: { locale?: 'en' } = {}) {
+async function bench(options: { locale?: 'en'; navigation?: Config['navigation'] } = {}) {
+  if (options.navigation !== undefined) vi.stubGlobal('__DSH_SIDEBAR_NAVIGATION__', { navigation: options.navigation })
   const runtime = await SlotTestRuntime.create()
   runtime.ctx.provide('shortcuts', { catalog: createSnapshotStore([]) } as never)
   runtime.ctx.provide('layout', { toggleSidebar: vi.fn() })
@@ -70,6 +73,17 @@ describe('sidebar shell snapshots', () => {
     expect(slot.view.getAllByRole('button', { name: 'New session' })).toHaveLength(2)
     expect(slot.container).toMatchSnapshot()
     await runtime.dispose()
+  })
+
+  it('renders the panel-first research assistant initially folded', async () => {
+    const { runtime } = await bench({ locale: 'en', navigation: 'panel-first' })
+    try {
+      const slot = runtime.renderSlot('sidebar', { collapsed: false, width: 300 })
+      expect(slot.view.getByRole('button', { name: 'Research assistant' }).getAttribute('aria-expanded')).toBe('false')
+      expect(slot.container).toMatchSnapshot()
+    } finally {
+      await runtime.dispose()
+    }
   })
 
   it('renders the collapsed rail after the crossfade settles, in place', async () => {

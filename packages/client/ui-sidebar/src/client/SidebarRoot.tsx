@@ -89,6 +89,7 @@ function PanelRow({ id, label, wide, usePanelInfo, selectPanel, renderSlot }: Pa
  * @returns the sidebar element tree.
  */
 export function SidebarRoot({
+  navigation,
   collapsed,
   width,
   startSession,
@@ -101,8 +102,10 @@ export function SidebarRoot({
   renderSlot,
 }: SidebarRootComponentProps) {
   const panels = usePanels(snapshot => snapshot)
-  const homePanel = panels[0]
+  const panelFirst = navigation === 'panel-first'
+  const homePanel = panelFirst ? panels[0] : undefined
   const [assistantOpen, setAssistantOpen] = useState(false)
+  const browserOpen = !panelFirst || assistantOpen
   const toggleAssistant = useCallback(() => { setAssistantOpen(open => !open) }, [])
   const shortcut = useShortcuts(rows => rows.find(row => row.id === 'sidebar.left.toggle'))
   const newShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
@@ -202,6 +205,22 @@ export function SidebarRoot({
     </Tooltip>
   )
 
+  const panelList = panels.length > 0 && (
+    <nav className={css.panelList} aria-label={t('panels.label')}>
+      {panels.map(({ id, label }) => (
+        <PanelRow
+          key={id}
+          id={id}
+          label={label}
+          wide={wide}
+          usePanelInfo={usePanelInfo}
+          selectPanel={selectPanel}
+          renderSlot={renderSlot}
+        />
+      ))}
+    </nav>
+  )
+
   return (
     <div
       ref={column}
@@ -220,8 +239,7 @@ export function SidebarRoot({
           traffic lights and keeps the toggle at the sidebar's top-right. */}
       {darwinDesktop && <div className={css.topStrip} data-window-drag>{toggle}</div>}
       <div className={css.logoRow} data-window-drag>
-        {/* Expanded, the brand opens the first global panel, or a new session
-            when no panel exists. On macOS it remains a window-drag surface
+        {/* The policy chooses the brand action. On macOS it remains a window-drag surface
             (a button would subtract itself through the global no-drag rule);
             the collapsed rail's logo is the expand toggle below instead. */}
         {wide && (() => {
@@ -261,21 +279,7 @@ export function SidebarRoot({
         {!darwinDesktop && toggle}
       </div>
 
-      {panels.length > 0 && (
-        <nav className={css.panelList} aria-label={t('panels.label')}>
-          {panels.map(({ id, label }) => (
-            <PanelRow
-              key={id}
-              id={id}
-              label={label}
-              wide={wide}
-              usePanelInfo={usePanelInfo}
-              selectPanel={selectPanel}
-              renderSlot={renderSlot}
-            />
-          ))}
-        </nav>
-      )}
+      {panelFirst && panelList}
 
       {/* The label fades before the hover/focus shortcut, including on translucent backgrounds. */}
       <Tooltip label={t('session.new.label')} shortcutKeys={newShortcut?.keys} delayMs={500} side={captionTooltipSide} disabled={wide}>
@@ -298,10 +302,12 @@ export function SidebarRoot({
         </button>
       </Tooltip>
 
+      {!panelFirst && panelList}
+
       {/* Keep the browser mounted while folded so its state and shortcut
           requests survive; the rail still exposes its normal controls. */}
       <div className={css.regionArea}>
-        {wide && <DisclosureRow
+        {panelFirst && wide && <DisclosureRow
           className={css.assistantHeader}
           rowClassName={css.assistantToggle}
           icon={ASSISTANT_ICON}
@@ -313,11 +319,11 @@ export function SidebarRoot({
         />}
         <div
           className={css.assistantBrowser}
-          hidden={wide && !assistantOpen}
+          hidden={wide && !browserOpen}
           onFocusCapture={() => { if (wide) setAssistantOpen(true) }}
         >
           {renderSlot('sidebar.workspaces', {
-            wide: wide && assistantOpen,
+            wide: wide && browserOpen,
             expandSidebar: () => {
               setAssistantOpen(true)
               if (collapsed) toggleSidebar()

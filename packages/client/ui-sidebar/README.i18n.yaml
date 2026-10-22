@@ -3,29 +3,32 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/client/ui-sidebar/README.md
 /:
-  en: 16040843d529685d
-  zh: 0d8227fa36ea7377
+  en: 312f16dcb71154bd
+  zh: a8ad41862456e157
 /deepseek-ai-dsh-client-ui-sidebar:
   en: e357f49fb1d1710e
   zh: 2e61922b104f77eb
 /deepseek-ai-dsh-client-ui-sidebar/summary:
-  en: 2c080a8f80b4a9d3
-  zh: fa9be4f43b032d7b
+  en: a65007f47cf10ebc
+  zh: 9f0a623dd8c9ef21
 /deepseek-ai-dsh-client-ui-sidebar/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
 /deepseek-ai-dsh-client-ui-sidebar/use-this-package:
-  en: a970f0547496634f
-  zh: 36ef9a85b26e19f1
+  en: 6bfdd090ac43a287
+  zh: 98bac79b16226a63
+/deepseek-ai-dsh-client-ui-sidebar/use-this-package/navigation-policy:
+  en: 653fda043b3bb898
+  zh: 32475d84a5e644a5
 /deepseek-ai-dsh-client-ui-sidebar/use-this-package/brand-and-new-session:
-  en: 9efccdedb6fe649d
-  zh: a482dcbfb28b22b9
+  en: cb3d57992477ab59
+  zh: 9d7776a9ff9c87a1
 /deepseek-ai-dsh-client-ui-sidebar/use-this-package/global-panel-entries:
-  en: 1141599540937991
-  zh: fd9ad1f0a70bcfbb
+  en: 4902ca181bc7fdf8
+  zh: 4d4989b7c64ef82c
 /deepseek-ai-dsh-client-ui-sidebar/use-this-package/research-assistant:
-  en: 836c1a27e65f153a
-  zh: 9f7303c59167fe30
+  en: 5478dcb436ae539c
+  zh: 347bef789bdae5d0
 /deepseek-ai-dsh-client-ui-sidebar/use-this-package/collapse-behavior:
   en: 8996c9b65c8eb635
   zh: 9c7ce08b90f3c1f5

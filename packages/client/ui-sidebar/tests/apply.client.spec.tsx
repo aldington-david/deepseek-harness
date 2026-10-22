@@ -9,7 +9,6 @@ import { apply, inject } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { SidebarRootInjected } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { HeaderLeadingControls } from '../src/client/HeaderLeadingControls.tsx'
-import { apply as hostApply } from '../src/index.ts'
 
 const owners = new Set<Fiber>()
 afterEach(async () => {
@@ -17,6 +16,7 @@ afterEach(async () => {
     for (const owner of owners) await owner.dispose()
   } finally {
     owners.clear()
+    vi.unstubAllGlobals()
   }
 })
 
@@ -53,8 +53,11 @@ async function bench(declare = true) {
 }
 
 describe('ui-sidebar apply', () => {
-  it('keeps the host Loader entry inert', () => {
-    expect(hostApply).not.toThrow()
+  it('rejects malformed page policy before registering the shell', async () => {
+    const b = await bench()
+    vi.stubGlobal('__DSH_SIDEBAR_NAVIGATION__', { navigation: 'investment' })
+    expect(() => { apply(b.ctx) }).toThrow()
+    expect(b.slots.entries('sidebar')).toEqual([])
   })
 
   it('declares only the services it uses', () => {
@@ -80,7 +83,7 @@ describe('ui-sidebar apply', () => {
     expect(leading[0]!.locale).toBe('sidebar')
     expect(leading[0]!.inject).toBe(b.slots.entries('sidebar')[0]!.inject)
     const injected = (b.slots.entries('sidebar')[0]!.inject as () => SidebarRootInjected)()
-    expect(Object.keys(injected)).toEqual(['startSession', 'toggleSidebar', 'selectPanel', 'hooks'])
+    expect(injected.navigation).toBe('conversation-first')
     expect(injected.hooks.panels.getSnapshot()).toEqual([])
     expect(b.slots.entries('main')).toEqual([])
     // Both arms delegate to the Workspace UI's shared New Session action.

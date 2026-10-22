@@ -35,7 +35,8 @@ type AttentionSnapshot = Parameters<Parameters<SidebarRootComponentProps['useSes
 const noAttention: AttentionSnapshot = new Map()
 const useSessionStatus: SidebarRootComponentProps['useSessionStatus'] = selector => selector(noAttention)
 
-function mountShell({ collapsed = false, width = 300, shortcuts = [], workspacePortal = false }: {
+function mountShell({ navigation = 'panel-first', collapsed = false, width = 300, shortcuts = [], workspacePortal = false }: {
+  navigation?: SidebarRootComponentProps['navigation']
   collapsed?: boolean
   width?: number
   shortcuts?: readonly ShortcutCatalogEntry[]
@@ -51,6 +52,7 @@ function mountShell({ collapsed = false, width = 300, shortcuts = [], workspaceP
   let current = { collapsed, width }
   const root = () => (
     <SidebarRoot
+      navigation={navigation}
       collapsed={current.collapsed} width={current.width}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector(shortcuts)}
@@ -117,7 +119,7 @@ describe('SidebarRoot shell', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
     expect(Array.from(expanded.querySelectorAll('kbd'), key => key.textContent)).toEqual(['Ctrl', 'N'])
     cleanup()
-    render(<HeaderLeadingControls toggleSidebar={vi.fn()} startSession={vi.fn()} selectPanel={vi.fn()} t={t}
+    render(<HeaderLeadingControls navigation="conversation-first" toggleSidebar={vi.fn()} startSession={vi.fn()} selectPanel={vi.fn()} t={t}
       usePanelInfo={neverHook} useSessions={neverHook} useSessionStatus={neverHook}
       useSessionRetainInfo={neverHook} useResource={useResource} useWorkspaces={neverHook}
       usePanels={select => select([])} useShortcuts={select => select([shortcut])} />)
@@ -144,6 +146,7 @@ describe('SidebarRoot shell', () => {
     vi.stubEnv('DSH_CLIENT_GIT_DIRTY', 'true')
     vi.stubEnv('DSH_CLIENT_VERSION', '1.2.3-rc.4')
     const { container } = render(<SidebarRoot
+      navigation="conversation-first"
       collapsed={false} width={300}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}
@@ -164,6 +167,7 @@ describe('SidebarRoot shell', () => {
   ])('omits unavailable build-version suffixes from %j', (environment, expected) => {
     for (const [name, value] of Object.entries(environment)) vi.stubEnv(name, value)
     render(<SidebarRoot
+      navigation="conversation-first"
       collapsed={false} width={300}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}
@@ -179,6 +183,7 @@ describe('SidebarRoot shell', () => {
 
   it('retains the local-build fallback without complete build metadata', () => {
     render(<SidebarRoot
+      navigation="conversation-first"
       collapsed={false} width={300}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}
@@ -208,6 +213,16 @@ describe('SidebarRoot shell', () => {
     fireEvent.keyDown(disclosure, { key: 'Enter' })
     expect(disclosure.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByTestId('region')).toBe(region)
+  })
+
+  it('shows the workspace browser without a disclosure in conversation-first mode', () => {
+    const b = mountShell({ navigation: 'conversation-first' })
+    expect(screen.queryByRole('button', { name: 'Research assistant' })).toBeNull()
+    expect(screen.getByTestId('region').parentElement?.hidden).toBe(false)
+    expect(b.regionOwner().wide).toBe(true)
+    expect(b.settingsOwner().wide).toBe(true)
+    act(() => { b.regionOwner().expandSidebar() })
+    expect(b.toggleSidebar).not.toHaveBeenCalled()
   })
 
   it('reveals a folded browser on its request without collapsing the sidebar', () => {
@@ -260,6 +275,7 @@ describe('SidebarRoot shell', () => {
   it('shows only the badge bubble while the rail badge is hovered inside the toggle', () => {
     vi.useFakeTimers()
     render(<SidebarRoot
+      navigation="conversation-first"
       collapsed width={56}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])} useShortcuts={selector => selector([])}

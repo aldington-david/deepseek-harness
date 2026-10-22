@@ -14,6 +14,7 @@ import type { SidebarPanelMetadata, SidebarRootInjected } from './contract/slots
 import { HeaderLeadingControls } from './HeaderLeadingControls.tsx'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { en, zh, type SidebarKey } from './locales.ts'
+import { Config, NAVIGATION_CONFIG_GLOBAL } from '../navigation-config.ts'
 
 export type {
   SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
@@ -43,6 +44,9 @@ export const inject = ['slots', 'layout', 'uiWorkspace', 'locale', 'shortcuts']
  * @param ctx - Client root context.
  */
 export function apply(ctx: ClientContext): void {
+  const page = globalThis as Partial<Record<typeof NAVIGATION_CONFIG_GLOBAL, unknown>>
+  const payload = page[NAVIGATION_CONFIG_GLOBAL]
+  const config = Config(payload === undefined ? {} : payload)
   const workspaceNavigation = ctx.get('uiWorkspace') as unknown as WorkspaceNavigation
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-sidebar: dictionaries')
   const panels = createSnapshotStore<readonly SidebarPanelMetadata[]>([])
@@ -63,6 +67,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.subscribe(syncPanels), 'ui-sidebar: panel labels')
 
   const injectProps = (): SidebarRootInjected => ({
+    navigation: config.navigation,
     // The shell's New Session button rides the Workspace UI's shared action
     // (current Session Workspace, then recent Workspace).
     startSession: (workspaceId) => { workspaceNavigation.startSession(workspaceId) },

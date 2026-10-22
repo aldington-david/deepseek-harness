@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 /** Global panel rows and DOM focus through the production slot renderer. */
-import type { Context } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
@@ -12,6 +12,8 @@ import { IconGlobeOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ILayout, MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { PropsRenderSlots, PropsRuntime, SlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import { apply, inject } from '../src/client/index.ts'
+import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
+import * as hostPlugin from '../src/index.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -28,11 +30,21 @@ afterEach(async () => {
     for (const runtime of runtimes) await runtime.dispose()
   } finally {
     runtimes.clear()
+    vi.unstubAllGlobals()
     cleanup()
   }
 })
 
-async function bench(collapsed = false) {
+async function bench(collapsed = false, config: Partial<hostPlugin.Config> = {}) {
+  const host = new Context()
+  try {
+    await host.plugin(hostPlugin, config).await()
+    const rows: IndexInjection[] = []
+    host.emit('webserver/index-inject', rows)
+    for (const row of rows) if (row.kind === 'global') vi.stubGlobal(row.name, row.value)
+  } finally {
+    await host.fiber.dispose()
+  }
   const runtime = await SlotTestRuntime.create()
   runtimes.add(runtime)
   const locale = new LocaleRuntime(runtime.ctx)
@@ -183,8 +195,18 @@ describe('sidebar global panels', () => {
     expect(within(navigation).getAllByRole('button').map(row => row.textContent)).toEqual(['Alpha panel', 'Beta panel'])
   })
 
+  it('keeps New Session before global panels and on the brand by default', async () => {
+    const { runtime, locale, view } = await bench()
+    await mountPanels(runtime, locale)
+    const navigation = await view.findByRole('navigation', { name: 'Global panels' })
+    const starters = view.getAllByRole('button', { name: 'New session' })
+    expect(starters).toHaveLength(2)
+    expect(starters[1]!.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(view.queryByRole('button', { name: 'Research assistant' })).toBeNull()
+  })
+
   it('places global panels before New Session and makes the brand open the first ordered panel', async () => {
-    const { runtime, locale, layout, view } = await bench()
+    const { runtime, locale, layout, view } = await bench(false, { navigation: 'panel-first' })
     const { beta } = await mountPanels(runtime, locale, -100)
     const navigation = await view.findByRole('navigation', { name: 'Global panels' })
     const newSession = view.getByRole('button', { name: 'New session' })
