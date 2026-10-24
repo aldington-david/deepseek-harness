@@ -128,7 +128,7 @@ describe('CLI help prefetch', () => {
     await expect(reader.readHelp(['c'])).rejects.toMatchObject({ name: 'AbortError' })
   })
 
-  it.each([0, 1.5])('rejects concurrency %j', (concurrency) => {
+  it.each([0, 1.5, Number.NaN])('rejects concurrency %j', (concurrency) => {
     expect(() => prefetchHelp(async () => '', [], concurrency)).toThrow('concurrency must be a positive integer')
   })
 })

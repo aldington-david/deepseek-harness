@@ -178,44 +178,44 @@ export async function collectCliHelp(
 
 async function collectHelp(): Promise<HelpPage[]> {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-cli-help-'))
-  const profiles = Object.keys(PROFILE_TEMPLATES)
-  // Concurrent profile boots share the repository worker budget.
-  const reader = prefetchHelp(async (args, signal) => {
-    // Each invocation boots against its own empty Harness and agents homes.
-    const home = mkdtempSync(join(directory, 'invocation-'))
-    const environment = {
-      ...process.env,
-      DSH_HOME: join(home, 'harness'),
-      DSH_AGENTS_HOME: join(home, 'agents'),
-      DSH_TELEMETRY_DISABLED: '1',
-      NO_COLOR: '1',
-    }
-    for (const name of ['NODE_OPTIONS', 'FORCE_COLOR']) Reflect.deleteProperty(environment, name)
-    const help = execFileAsync(process.execPath, [
-      '--import', 'tsx/esm', 'apps/cli/src/bin.ts', ...args, '--help',
-    ], {
-      cwd: root, env: environment, encoding: 'utf8', timeout: 30_000,
-      killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024,
-    })
-    // Killing directly, not through execFile's signal option, settles the read only after the child closes.
-    const abort = (): void => { help.child.kill('SIGKILL') }
-    signal.addEventListener('abort', abort, { once: true })
-    try {
-      const { stdout, stderr } = await help
-      if (stderr !== '') throw new Error(`${['dsh', ...args].join(' ')} --help wrote diagnostics: ${stderr}`)
-      return stdout
-    } finally {
-      signal.removeEventListener('abort', abort)
-    }
-  }, topLevelHelpArgs(profiles), defaultParallelism())
   try {
-    return await collectCliHelp(reader.readHelp, profiles)
-  } finally {
+    const profiles = Object.keys(PROFILE_TEMPLATES)
+    // Nested profile boots honor an explicit gate budget before using the machine default.
+    const reader = prefetchHelp(async (args, signal) => {
+      // Each invocation boots against its own empty Harness and agents homes.
+      const home = mkdtempSync(join(directory, 'invocation-'))
+      const environment = {
+        ...process.env,
+        DSH_HOME: join(home, 'harness'),
+        DSH_AGENTS_HOME: join(home, 'agents'),
+        DSH_TELEMETRY_DISABLED: '1',
+        NO_COLOR: '1',
+      }
+      for (const name of ['NODE_OPTIONS', 'FORCE_COLOR']) Reflect.deleteProperty(environment, name)
+      const help = execFileAsync(process.execPath, [
+        '--import', 'tsx/esm', 'apps/cli/src/bin.ts', ...args, '--help',
+      ], {
+        cwd: root, env: environment, encoding: 'utf8', timeout: 30_000,
+        killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024,
+      })
+      // Killing directly, not through execFile's signal option, settles the read only after the child closes.
+      const abort = (): void => { help.child.kill('SIGKILL') }
+      signal.addEventListener('abort', abort, { once: true })
+      try {
+        const { stdout, stderr } = await help
+        if (stderr !== '') throw new Error(`${['dsh', ...args].join(' ')} --help wrote diagnostics: ${stderr}`)
+        return stdout
+      } finally {
+        signal.removeEventListener('abort', abort)
+      }
+    }, topLevelHelpArgs(profiles), Number(process.env.DSH_GATE_CONCURRENCY || defaultParallelism()))
     try {
-      await reader.close()
+      return await collectCliHelp(reader.readHelp, profiles)
     } finally {
-      rmSync(directory, { recursive: true, force: true })
+      await reader.close()
     }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
   }
 }
 
