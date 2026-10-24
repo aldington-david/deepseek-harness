@@ -293,8 +293,8 @@ export interface ProfileRecomposition {
  * packages; the generation is applied to the root Include; entries that ran, and enabled entries whose import failed,
  * start afterwards when the update left them without a running fiber; and activation is judged. A failure before the generation applies,
  * including a publication the resolution rejects, which reports `package-moved`, puts the removed rows back at their
- * places, starting them again, and starts the entries that ran again. An entry waiting for a service is reported as a
- * warning unless it is required. Patches are copied with `structuredClone`, so they hold no functions.
+ * places, starting them again, and starts the entries that ran again while the root remains active. An entry waiting
+ * for a service is reported as a warning unless it is required. Patches are copied with `structuredClone`, so they hold no functions.
  * @param ctx Booted root context.
  * @param patches Complete ordered patch list.
  * @param binName Diagnostic prefix.
@@ -302,7 +302,7 @@ export interface ProfileRecomposition {
  * @returns Diagnostics for unchanged pre-existing inactive entries, and the restart reason of a rejected publication.
  * @throws When the root Include is missing; the latest resolution cannot be read or published; preparation or the
  * Loader update rejects; or for a new or changed failure, an inactive required entry, a failed entry that ran, or a
- * healthy fiber whose disposal rejected.
+ * healthy fiber whose disposal rejected. Root disposal interrupts recomposition waits and still joins plugin cleanup.
  */
 export function recomposeProfile(
   ctx: Context, patches: PatchOptions[], binName: string, options: ProfileRecompositionOptions = {},
@@ -318,6 +318,7 @@ export function recomposeProfile(
  * @param binName Diagnostic prefix.
  * @param requiredIds Explicit enablement targets whose existing failures also reject reconciliation.
  * @returns Diagnostics for unchanged pre-existing inactive entries; new or changed failures reject.
+ * @throws When reconciliation fails or the root context starts disposing; root disposal still joins plugin cleanup.
  */
 export async function reconcileProfilePatches(
   ctx: Context, patches: PatchOptions[], binName: string, requiredIds: readonly string[] = [],
@@ -329,6 +330,19 @@ async function recompose(
   ctx: Context, patches: PatchOptions[], binName: string, options: ProfileRecompositionOptions, withResolution: boolean,
 ): Promise<ProfileRecomposition> {
   const { requiredIds = [], running = [] } = options
+  const lifetime = new AbortController()
+  const dispose = ctx.effect(() => () => lifetime.abort(new Error(`${binName}: profile recomposition interrupted by shutdown`)), 'profile recomposition')
+  const wait = async <T>(operation: Promise<T>): Promise<T> => {
+    const stopped = Promise.withResolvers<never>()
+    const abort = () => { stopped.reject(lifetime.signal.reason) }
+    if (lifetime.signal.aborted) abort()
+    else lifetime.signal.addEventListener('abort', abort, { once: true })
+    try {
+      const result = await Promise.race([stopped.promise, operation])
+      lifetime.signal.throwIfAborted()
+      return result
+    } finally { lifetime.signal.removeEventListener('abort', abort) }
+  }
   let applying = false
   // The rows stopped first, which a failure before the generation applies puts back.
   let stopped: StoppedRow[] = []
@@ -336,7 +350,7 @@ async function recompose(
     const entry = bootstrapIncludes.get(ctx)
     if (entry === undefined) throw new Error(`${binName}: profile reload requires the root Include entry`)
     // Reading the prior state imports nothing, so plugin code does not run before the next resolution publishes.
-    const previousFailures = (await inactiveEntries(ctx, false)).map((failure): RecordedFailure => ({
+    const previousFailures = (await wait(inactiveEntries(ctx, false))).map((failure): RecordedFailure => ({
       entry: failure.entry, fiber: failure.entry.fiber, options: JSON.stringify(failure.entry.options),
       // An entry without a running fiber has no import error yet; the judgment after the update reads it.
       diagnostic: failure.entry.fiber?.uid ? reloadDiagnostic(failure) : undefined,
@@ -348,7 +362,7 @@ async function recompose(
     const { patches: previous = [], ...includeConfig } = entry.options.config as Include.Config
     const current = withResolution ? ctx.get('pluginPackages')?.resolution : undefined
     // A plain-data resolution has no inputs to recompute from.
-    const successor = current instanceof ProfileRuntimeResolution ? await current.computeLatestResolution() : undefined
+    const successor = current instanceof ProfileRuntimeResolution ? await wait(current.computeLatestResolution()) : undefined
     if (successor !== undefined) {
       // Rows the generation no longer lists stop, and their disposal finishes, while their packages are still mapped.
       const listed = rowIds(structuredClone(patches))
@@ -372,8 +386,8 @@ async function recompose(
           row.options.disabled = true
           row.parent.remove(row.options.id)
         }
-        await Promise.allSettled(fibers.map(fiber => fiber.await()))
-        await ctx.loader.await()
+        await wait(Promise.allSettled(fibers.map(fiber => fiber.await())))
+        await wait(ctx.loader.await())
       }
       try {
         publish(ctx, successor)
@@ -389,13 +403,14 @@ async function recompose(
     applying = true
     const retried = [...new Set([...running, ...withResolution ? [...ctx.loader.entries()].filter(importFailed) : []])]
     try {
-      await entry.update({ config: { ...includeConfig, patches: prepared } })
+      await wait(entry.update({ config: { ...includeConfig, patches: prepared } }))
     } finally {
-      await resume(ctx, retried)
+      if (!lifetime.signal.aborted) await wait(resume(ctx, retried))
     }
-    const results = await Promise.allSettled(previousFibers.map(({ fiber }) => fiber.await()))
-    await ctx.loader.await()
-    const failures = await inactiveEntries(ctx)
+    // A caller may drain this operation while unloading; root disposal owns the remaining plugin cleanup.
+    const results = await wait(Promise.allSettled(previousFibers.map(({ fiber }) => fiber.await())))
+    await wait(ctx.loader.await())
+    const failures = await wait(inactiveEntries(ctx))
     const introduced = failures.filter((failure) => {
       if (requiredIds.includes(failure.entry.options.id)) return true
       // An entry waiting for a service starts once a provider appears.
@@ -411,27 +426,29 @@ async function recompose(
     ctx.emit('app-boot/config-reload')
     return { warnings: failures.map(reloadDiagnostic) }
   } finally {
-    // Before the generation applies, the rows removed first and the entries the caller stopped run again.
-    if (!applying && (stopped.length > 0 || running.length > 0)) {
-      try {
-        // Ascending original positions put each row back where it was.
-        for (const { group, options, index } of stopped.toSorted((left, right) => left.index - right.index)) {
-          // `create` starts the entry but leaves the group's option list as it is; that list is what the next update
-          // compares against to remove the row and what the Include writes back.
-          group.data.splice(index, 0, options)
-          await group.create(options)
+    try {
+      // Before the generation applies, the rows removed first and the entries the caller stopped run again.
+      if (!applying && !lifetime.signal.aborted && (stopped.length > 0 || running.length > 0)) {
+        try {
+          // Ascending original positions put each row back where it was.
+          for (const { group, options, index } of stopped.toSorted((left, right) => left.index - right.index)) {
+            // `create` starts the entry but leaves the group's option list as it is; that list is what the next update
+            // compares against to remove the row and what the Include writes back.
+            group.data.splice(index, 0, options)
+            await wait(group.create(options))
+          }
+          await wait(resume(ctx, running))
+          // A restored row is a new Loader entry with the id of the one that ran.
+          const ran = new Set(running.map(row => row.options.id))
+          for (const failure of await wait(inactiveEntries(ctx))) {
+            if (ran.has(failure.entry.options.id)) ctx.logger.warn(`${binName}: ${reloadDiagnostic(failure)}`)
+          }
+        } catch (error) {
+          // The recomposition's own failure is the outcome.
+          ctx.logger.warn(error)
         }
-        await resume(ctx, running)
-        // A restored row is a new Loader entry with the id of the one that ran.
-        const ran = new Set(running.map(row => row.options.id))
-        for (const failure of await inactiveEntries(ctx)) {
-          if (ran.has(failure.entry.options.id)) ctx.logger.warn(`${binName}: ${reloadDiagnostic(failure)}`)
-        }
-      } catch (error) {
-        // The recomposition's own failure is the outcome.
-        ctx.logger.warn(error)
       }
-    }
+    } finally { await dispose() }
   }
 }
 
