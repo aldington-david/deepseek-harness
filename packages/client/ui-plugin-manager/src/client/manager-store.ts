@@ -1200,8 +1200,8 @@ export class PluginManagerController {
   }
 
   /**
-   * Enable the bundle the finished install added, refresh its state, then close
-   * the dialog and mark it in the list. A refusal toasts and still closes.
+   * Enable and refresh the installed bundle, then close its dialog and mark the
+   * bundle only while that installation is current. A refusal still toasts.
    */
   private async enableInstalled(): Promise<void> {
     const install = this.getSnapshot().install
@@ -1223,7 +1223,9 @@ export class PluginManagerController {
     } catch (_error) {
       this.patch({ status: 'error' })
     } finally {
-      this.patch({ install: IDLE_INSTALL, highlight: name })
+      if (this.getSnapshot().install.requestId === install.requestId) {
+        this.patch({ install: IDLE_INSTALL, highlight: name })
+      }
     }
   }
 

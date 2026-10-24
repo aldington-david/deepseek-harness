@@ -1096,6 +1096,34 @@ describe('PluginManagerController', () => {
     expect(state().packages[0]?.enabled).toBe(true)
   })
 
+  it('keeps a newer install draft when an earlier enable refresh settles', async () => {
+    let installed = false
+    const { plugins, face, state, controller } = bench({
+      listBundles: vi.fn(() => Promise.resolve(ok(installed ? [BUNDLE] : []))),
+      installBundle: vi.fn(() => { installed = true; return Promise.resolve(ok({ ...APPLIED, bundle: BUNDLE.name })) }),
+    })
+    await controller.load()
+    face.openInstall()
+    face.editInstallSpec(BUNDLE.name)
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('done') })
+    await controller.load()
+    const previousRequest = state().install.requestId
+    const fresh = deferred<ReturnType<typeof ok<BundleInfo[]>>>()
+    const reading = deferred<undefined>()
+    onTestFinished(() => { fresh.resolve(ok([{ ...BUNDLE, enabled: true }])) })
+    plugins.listBundles.mockImplementation(() => { reading.resolve(undefined); return fresh.promise })
+    face.enableInstalled()
+    await reading.promise
+    face.closeInstall()
+    face.openInstall()
+    face.editInstallSpec('keep-this-new-draft')
+    expect(state().install.requestId).not.toBe(previousRequest)
+    fresh.resolve(ok([{ ...BUNDLE, enabled: true }]))
+    await controller.load()
+    expect(state().install).toMatchObject({ open: true, phase: 'idle', spec: 'keep-this-new-draft' })
+  })
+
   it('keeps the switch busy until the changed bundle is reflected in a fresh list', async () => {
     const { plugins, face, state, controller } = bench({ listBundles: vi.fn(() => Promise.resolve(ok([{ ...BUNDLE, enabled: true }]))) })
     await controller.load()
