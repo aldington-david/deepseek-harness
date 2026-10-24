@@ -391,7 +391,7 @@ export function SidebarRoot({
         <div
           className={css.assistantBrowser}
           hidden={wide && !browserOpen}
-          onFocusCapture={() => { if (wide) setAssistantOpen(true) }}
+          onFocusCapture={() => { if (panelFirst && wide) setAssistantOpen(true) }}
         >
           {renderSlot('sidebar.workspaces', {
             wide: wide && browserOpen,

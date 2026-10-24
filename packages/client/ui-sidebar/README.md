@@ -61,7 +61,7 @@ While the root-scoped `sidebar.panellist.actions` list has registrations, a **Mo
 
 ### Research assistant
 
-In `panel-first` mode, the expanded sidebar groups its Workspace and Session browser under a keyboard-operable Research assistant disclosure, initially closed. Folding hides the browser without unmounting it. The browser receives `wide: false` while folded so its existing search request can reveal the section through `expandSidebar`; focus entering the browser or its portalled controls also reveals it. The 56px rail keeps its Workspace controls, and a request to expand the rail opens the section as well. The section state lasts for the sidebar component's lifetime and is independent from global panel selection.
+In `panel-first` mode, the expanded sidebar groups its Workspace and Session browser under a keyboard-operable Research assistant disclosure, initially closed. Folding hides the browser without unmounting it. The browser receives `wide: false` while folded so its existing search request can reveal the section through `expandSidebar`; focus entering the browser or its portalled controls also reveals it. In `conversation-first` mode, focusing the browser leaves the sidebar layout and click target unchanged. The 56px rail keeps its Workspace controls, and a request to expand the rail opens the section as well. The section state lasts for the sidebar component's lifetime and is independent from global panel selection.
 
 ### Collapse behavior
 
