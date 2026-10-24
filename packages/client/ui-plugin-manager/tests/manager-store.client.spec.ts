@@ -1070,6 +1070,82 @@ describe('PluginManagerController', () => {
     expect(state().notice).toBeNull()
   })
 
+  it('keeps the installed screen busy until the enabled bundle is reflected in a fresh list', async () => {
+    let installed = false
+    const { plugins, face, state, controller } = bench({
+      listBundles: vi.fn(() => Promise.resolve(ok(installed ? [BUNDLE] : []))),
+      installBundle: vi.fn(() => { installed = true; return Promise.resolve(ok({ ...APPLIED, bundle: BUNDLE.name })) }),
+    })
+    await controller.load()
+    face.openInstall()
+    face.editInstallSpec(BUNDLE.name)
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('done') })
+    await controller.load()
+    expect(state().packages[0]?.enabled).toBe(false)
+    const fresh = deferred<ReturnType<typeof ok<BundleInfo[]>>>()
+    const reading = deferred<undefined>()
+    onTestFinished(() => { fresh.resolve(ok([{ ...BUNDLE, enabled: true }])) })
+    plugins.listBundles.mockImplementation(() => { reading.resolve(undefined); return fresh.promise })
+    face.enableInstalled()
+    await reading.promise
+    expect(plugins.setBundleEnabled).toHaveBeenCalledExactlyOnceWith(BUNDLE.name, true)
+    expect(state().install).toMatchObject({ open: true, enabling: true })
+    fresh.resolve(ok([{ ...BUNDLE, enabled: true }]))
+    await vi.waitFor(() => { expect(state().install.open).toBe(false) })
+    expect(state().packages[0]?.enabled).toBe(true)
+  })
+
+  it('keeps the switch busy until the changed bundle is reflected in a fresh list', async () => {
+    const { plugins, face, state, controller } = bench({ listBundles: vi.fn(() => Promise.resolve(ok([{ ...BUNDLE, enabled: true }]))) })
+    await controller.load()
+    const fresh = deferred<ReturnType<typeof ok<BundleInfo[]>>>()
+    const reading = deferred<undefined>()
+    onTestFinished(() => { fresh.resolve(ok([BUNDLE])) })
+    plugins.listBundles.mockImplementation(() => { reading.resolve(undefined); return fresh.promise })
+    face.setEnabled(BUNDLE.name, false)
+    await reading.promise
+    expect(plugins.setBundleEnabled).toHaveBeenCalledExactlyOnceWith(BUNDLE.name, false)
+    expect(state().busy).toContain(BUNDLE.name)
+    face.setEnabled(BUNDLE.name, false)
+    expect(plugins.setBundleEnabled).toHaveBeenCalledOnce()
+    fresh.resolve(ok([BUNDLE]))
+    await vi.waitFor(() => { expect(state().busy).not.toContain(BUNDLE.name) })
+    expect(state().packages[0]?.enabled).toBe(false)
+  })
+
+  it.each(['refused', 'rejected'] as const)('releases the installed screen after a %s refresh and permits a read retry', async (failure) => {
+    const { plugins, face, state, controller } = bench({ installBundle: vi.fn(() => Promise.resolve(ok({ ...APPLIED, bundle: 'dsh-new' }))) })
+    await controller.load()
+    face.openInstall()
+    face.editInstallSpec('dsh-new')
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('done') })
+    await controller.load()
+    if (failure === 'refused') plugins.listBundles.mockResolvedValueOnce(refused('gateway/internal', 'offline'))
+    else plugins.listBundles.mockRejectedValueOnce(new Error('offline'))
+    face.enableInstalled()
+    await vi.waitFor(() => { expect(state().install.open).toBe(false) })
+    expect(state().install.enabling).toBe(false)
+    expect(state().status).toBe('error')
+    expect(state().notice).toBeNull()
+    await controller.load()
+    expect(state().status).toBe('ready')
+  })
+
+  it.each(['refused', 'rejected'] as const)('releases a switch after a %s refresh without calling the applied change a failure', async (failure) => {
+    const { plugins, face, state, controller } = bench()
+    await controller.load()
+    if (failure === 'refused') plugins.listBundles.mockResolvedValueOnce(refused('gateway/internal', 'offline'))
+    else plugins.listBundles.mockRejectedValueOnce(new Error('offline'))
+    face.setEnabled(BUNDLE.name, true)
+    await vi.waitFor(() => { expect(state().busy).not.toContain(BUNDLE.name) })
+    expect(state().status).toBe('error')
+    expect(state().notice).toBeNull()
+    await controller.load()
+    expect(state().status).toBe('ready')
+  })
+
   it('enables what a finished install added from its screen, closes, and marks it in the list', async () => {
     const { plugins, face, state, controller } = bench({
       installBundle: vi.fn()

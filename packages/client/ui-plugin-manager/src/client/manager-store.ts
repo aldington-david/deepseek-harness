@@ -368,7 +368,7 @@ export interface PluginManagerFace {
   /** Ask the Host for the result of an installation whose original reply was lost. */
   reconcileInstall: () => void
   toggleInstallDetails: () => void
-  /** Enable the bundle the finished install added, then close the dialog and mark it in the list. */
+  /** Enable the installed bundle, refresh its state, then close the dialog and mark it in the list. */
   enableInstalled: () => void
   /** Drop the list mark once it has been shown. */
   clearHighlight: () => void
@@ -1200,9 +1200,8 @@ export class PluginManagerController {
   }
 
   /**
-   * Enable the bundle the finished install added, then close the dialog and
-   * mark it in the list. A refusal toasts and still closes: the list shows
-   * what did not switch on.
+   * Enable the bundle the finished install added, refresh its state, then close
+   * the dialog and mark it in the list. A refusal toasts and still closes.
    */
   private async enableInstalled(): Promise<void> {
     const install = this.getSnapshot().install
@@ -1219,13 +1218,17 @@ export class PluginManagerController {
         this.patch({ notice: failedNotice(error, { packageName: name, action: 'enable' }, ++this.noticeSeq) })
       }
     }
-    this.patch({ install: IDLE_INSTALL, highlight: name })
-    await this.load()
+    try {
+      await this.load()
+    } catch (_error) {
+      this.patch({ status: 'error' })
+    } finally {
+      this.patch({ install: IDLE_INSTALL, highlight: name })
+    }
   }
 
   /**
-   * Run one action under a busy key, turn its failure into the notice, and
-   * re-read the Host afterwards whatever happened.
+   * Keep an action busy through its Host refresh and report action failures.
    */
   private async run(
     key: string,
@@ -1240,9 +1243,14 @@ export class PluginManagerController {
       // `patch` drops the notice after disposal.
       this.patch({ notice: failedNotice(error, subject, ++this.noticeSeq) })
     } finally {
-      this.patch({ busy: this.getSnapshot().busy.filter(entry => entry !== key) })
+      try {
+        await this.load()
+      } catch (_error) {
+        this.patch({ status: 'error' })
+      } finally {
+        this.patch({ busy: this.getSnapshot().busy.filter(entry => entry !== key) })
+      }
     }
-    await this.load()
   }
 
   /**
