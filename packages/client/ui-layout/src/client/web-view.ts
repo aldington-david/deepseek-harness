@@ -94,7 +94,7 @@ export interface WebView extends WebViewState {
   /**
    * Download complete JSON through the trusted host's file API.
    * @param file - User-requested export content.
-   * @returns Completion or a reported host failure.
+   * @returns Completion; rejects so the exporting control can present the failure once.
    */
   downloadFile(file: WebDownload): Promise<void>
   /** @returns The stable current presentation snapshot. */
@@ -189,11 +189,9 @@ export class WebViewController implements WebView {
 
   /** @param file - Complete JSON export. @returns The host operation result. */
   downloadFile = async (file: WebDownload): Promise<void> => {
-    try {
-      if (!file || typeof file.name !== 'string' || !file.name || /[\\/\u0000-\u001f\u007f]/.test(file.name)
-        || typeof file.text !== 'string' || file.mimeType !== 'application/json') throw new Error(this.text('invalidFile'))
-      await this.requestHost('download-file', { name: file.name, text: file.text, mimeType: file.mimeType })
-    } catch (error) { throw this.reportActionFailure(error) }
+    if (!file || typeof file.name !== 'string' || !file.name || /[\\/\u0000-\u001f\u007f]/.test(file.name)
+      || typeof file.text !== 'string' || file.mimeType !== 'application/json') throw new Error(this.text('invalidFile'))
+    await this.requestHost('download-file', { name: file.name, text: file.text, mimeType: file.mimeType })
   }
 
   private reportActionFailure(error: unknown): Error {

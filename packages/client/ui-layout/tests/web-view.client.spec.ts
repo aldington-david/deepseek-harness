@@ -60,7 +60,7 @@ describe('embedded original Web view', () => {
     expect(completed).toBe(true)
   })
 
-  it('preserves complete JSON text and displays host refusal without storing the export in view state', async () => {
+  it('preserves complete JSON text and returns host refusal to its caller without a global banner or saved export', async () => {
     const { instance, view } = start()
     context({ context: { displayMode: 'inline' } })
     const file = { name: 'research.json', mimeType: 'application/json' as const,
@@ -71,13 +71,13 @@ describe('embedded original Web view', () => {
     const rejected = expect(pending).rejects.toThrow('宿主拒绝下载')
     hostResult(request.requestId, { ok: false, error: '宿主拒绝下载' })
     await rejected
-    expect(instance.getSnapshot().webActionError).toBe('宿主拒绝下载')
+    expect(instance.getSnapshot().webActionError).toBeNull()
     expect(parent.postMessage.mock.calls.filter(([data]) => data.type === 'dsh:web-view-state')
       .some(([data]) => JSON.stringify(data).includes('9999999999999999.000001'))).toBe(false)
   })
 
   it('intercepts embedded native links while top-level browser links retain their original default', async () => {
-    const { view } = start()
+    const { instance, view } = start()
     context({ context: { displayMode: 'inline' } })
     const link = document.createElement('a')
     link.href = 'https://example.test/source'; link.target = '_blank'
@@ -90,8 +90,8 @@ describe('embedded original Web view', () => {
     link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     const request = parent.postMessage.mock.calls.at(-1)?.[0]
     expect(request).toMatchObject({ action: 'open-link', payload: { url: link.href } })
-    hostResult(request.requestId, { ok: true })
-    await Promise.resolve()
+    hostResult(request.requestId, { ok: false, error: '宿主拒绝打开链接' })
+    await vi.waitFor(() => { expect(instance.getSnapshot().webActionError).toBe('宿主拒绝打开链接') })
     view.dispose()
     vi.stubGlobal('parent', window)
     start()
