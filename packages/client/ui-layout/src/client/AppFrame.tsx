@@ -129,6 +129,7 @@ export function AppFrame({
 }: AppFrameProps) {
   const layoutInfo = useStore(state => state.layoutInfo)
   const presentation = useStore(state => state.presentation)
+  const webActionError = useStore(state => state.webActionError)
   const frameRef = useRef<HTMLDivElement | null>(null)
   const viewport = layoutInfo.viewportWidth
   const phone = phonePresentation(presentation, viewport)
@@ -308,6 +309,10 @@ export function AppFrame({
       <div className={css.overlayLayer} data-shell-overlay>
         {overlays}
       </div>
+      {webActionError && <div className={css.webActionError} role="alert">
+        <span>{webActionError}</span>
+        <button type="button" aria-label={t('close')} onClick={() => { actions.reportWebActionError(null) }}>{t('close')}</button>
+      </div>}
       {phone && !sidebarCollapsed && <button type="button" className={css.mobileBackdrop} aria-label={t('close')} onClick={() => actions.toggleSidebar()} />}
       {leadingMounted && (
         <div className={css.leadingSeat} data-shell-leading>

@@ -38,7 +38,12 @@ const absentState = {
 }
 
 function mountBrowser(navigation?: { readonly url?: string },
-  options: { initial?: BrowserTabState; createPage?: BrowserPageFactory; refreshShortcut?: ReturnType<BrowserBodyProps['useTabInfo']>['tab']['refreshShortcut'] } = {}) {
+  options: {
+    initial?: BrowserTabState
+    createPage?: BrowserPageFactory
+    openExternalLink?: (url: string) => void
+    refreshShortcut?: ReturnType<BrowserBodyProps['useTabInfo']>['tab']['refreshShortcut']
+  } = {}) {
   const store = createBrowserStore().create(`browser-body-test-${String(++mountSequence)}`)
   if (options.initial !== undefined) store.actions.replace(TAB, options.initial)
   const lifetime = new AbortController()
@@ -66,6 +71,7 @@ function mountBrowser(navigation?: { readonly url?: string },
         return params === undefined ? template : template.replace(/\{(\w+)\}/g, (_match, name: string) => String(params[name]))
       },
       ...commands,
+      ...(options.openExternalLink === undefined ? {} : { openExternalLink: options.openExternalLink }),
       useBrowserState: (key: string) => {
         const state = keyedHooks.browserState(key) ?? absentState
         return useSyncExternalStore(state.subscribe, state.getSnapshot)
@@ -255,6 +261,16 @@ describe('BrowserBody', () => {
     await waitFor(() => { expect(mounted.view.container.querySelector('iframe')).not.toBeNull() })
     fireEvent.click(mounted.view.getByRole('button', { name: zh.external }))
     expect(open).toHaveBeenCalledWith('https://initial.example/path', '_blank', 'noopener,noreferrer')
+  })
+
+  it('uses the original frame external-link command when supplied', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const openExternalLink = vi.fn()
+    const mounted = mountBrowser({ url: 'https://initial.example/path' }, { openExternalLink })
+    await waitFor(() => { expect(mounted.view.getByRole('button', { name: zh.external })).toHaveProperty('disabled', false) })
+    fireEvent.click(mounted.view.getByRole('button', { name: zh.external }))
+    expect(openExternalLink).toHaveBeenCalledWith('https://initial.example/path')
+    expect(open).not.toHaveBeenCalled()
   })
 
   it('keeps a rejected initial URL in the address input for editing', async () => {

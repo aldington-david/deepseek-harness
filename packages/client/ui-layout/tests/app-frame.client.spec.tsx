@@ -183,6 +183,14 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
+  it('shows a host-operation failure until the user dismisses it', () => {
+    const mounted = mountFrame()
+    act(() => { mounted.instance.actions.reportWebActionError('宿主拒绝下载') })
+    expect(mounted.getByRole('alert').textContent).toContain('宿主拒绝下载')
+    act(() => { mounted.getByRole('button', { name: 'close' }).click() })
+    expect(mounted.queryByRole('alert')).toBeNull()
+  })
+
   it('uses a phone drawer for inline or mobile hosts while keeping the mounted main content', () => {
     const { instance, frame, sidebarOwner, getByTestId, getByRole } = mountFrame()
     const main = getByTestId('main-content')

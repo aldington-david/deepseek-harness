@@ -18,6 +18,7 @@ function fakePanels(): PanelActions {
     receiveWebContext: vi.fn(),
     chooseViewMode: vi.fn(),
     seedViewPreferences: vi.fn(),
+    reportWebActionError: vi.fn(),
   }
 }
 

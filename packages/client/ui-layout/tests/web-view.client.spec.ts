@@ -18,6 +18,7 @@ afterEach(() => {
   for (const close of cleanups.splice(0)) close()
   history.replaceState({}, '', '/')
   vi.restoreAllMocks()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -32,8 +33,91 @@ function context(payload: object, source = window.parent, from = origin) {
     type: 'dsh:web-context', version: 1, ...payload,
   } }))
 }
+function hostResult(requestId: string, result: object, source = window.parent, from = origin, version = 1) {
+  window.dispatchEvent(new MessageEvent('message', { source, origin: from, data: {
+    type: 'dsh:web-host-result', version, requestId, ...result,
+  } }))
+}
 
 describe('embedded original Web view', () => {
+  it('forwards a protected URL only to the trusted host and accepts only its matching v1 response', async () => {
+    const { view } = start()
+    context({ context: { displayMode: 'inline' } })
+    const pending = view.openLink('https://dsh.example.test/report?period=daily')
+    const request = parent.postMessage.mock.calls.at(-1)?.[0]
+    expect(request).toMatchObject({ type: 'dsh:web-host-request', version: 1, action: 'open-link',
+      payload: { url: 'https://dsh.example.test/report?period=daily' } })
+    let completed = false
+    void pending.then(() => { completed = true })
+    hostResult(request.requestId, { ok: true }, window)
+    hostResult(request.requestId, { ok: true }, window.parent, 'https://other.example.test')
+    hostResult(request.requestId, { ok: true }, window.parent, origin, 2)
+    hostResult('another-request', { ok: true })
+    await Promise.resolve()
+    expect(completed).toBe(false)
+    hostResult(request.requestId, { ok: true })
+    await pending
+    expect(completed).toBe(true)
+  })
+
+  it('preserves complete JSON text and displays host refusal without storing the export in view state', async () => {
+    const { instance, view } = start()
+    context({ context: { displayMode: 'inline' } })
+    const file = { name: 'research.json', mimeType: 'application/json' as const,
+      text: '{"amount":"9999999999999999.000001","value":false}' }
+    const pending = view.downloadFile(file)
+    const request = parent.postMessage.mock.calls.at(-1)?.[0]
+    expect(request).toMatchObject({ action: 'download-file', payload: file })
+    const rejected = expect(pending).rejects.toThrow('宿主拒绝下载')
+    hostResult(request.requestId, { ok: false, error: '宿主拒绝下载' })
+    await rejected
+    expect(instance.getSnapshot().webActionError).toBe('宿主拒绝下载')
+    expect(parent.postMessage.mock.calls.filter(([data]) => data.type === 'dsh:web-view-state')
+      .some(([data]) => JSON.stringify(data).includes('9999999999999999.000001'))).toBe(false)
+  })
+
+  it('intercepts embedded native links while top-level browser links retain their original default', async () => {
+    const { view } = start()
+    context({ context: { displayMode: 'inline' } })
+    const link = document.createElement('a')
+    link.href = 'https://example.test/source'; link.target = '_blank'
+    document.body.append(link)
+    cleanups.push(() => { link.remove() })
+    const intercepted: boolean[] = []
+    const preventNavigation = (event: MouseEvent): void => { intercepted.push(event.defaultPrevented); event.preventDefault() }
+    document.addEventListener('click', preventNavigation)
+    cleanups.push(() => { document.removeEventListener('click', preventNavigation) })
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    const request = parent.postMessage.mock.calls.at(-1)?.[0]
+    expect(request).toMatchObject({ action: 'open-link', payload: { url: link.href } })
+    hostResult(request.requestId, { ok: true })
+    await Promise.resolve()
+    view.dispose()
+    vi.stubGlobal('parent', window)
+    start()
+    const calls = parent.postMessage.mock.calls.length
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(intercepted).toEqual([true, false])
+    expect(parent.postMessage).toHaveBeenCalledTimes(calls)
+  })
+
+  it('rejects invalid host actions and withdraws pending requests on timeout or disposal', async () => {
+    vi.useFakeTimers()
+    const { view } = start()
+    context({ context: { displayMode: 'inline' } })
+    const calls = parent.postMessage.mock.calls.length
+    await expect(view.openLink('https://user:password@example.test/')).rejects.toThrow()
+    await expect(view.downloadFile({ name: '../private.json', text: '{}', mimeType: 'application/json' })).rejects.toThrow()
+    expect(parent.postMessage).toHaveBeenCalledTimes(calls)
+    const timed = expect(view.openLink('https://example.test/')).rejects.toThrow(/timed out/)
+    await vi.advanceTimersByTimeAsync(65000)
+    await timed
+    const closed = expect(view.openLink('https://example.test/')).rejects.toThrow(/closed/)
+    view.dispose()
+    await closed
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('reports a failing restoration subscriber while restoring later features and completing frame readiness', () => {
     const { instance, view } = start()
     const failure = new Error('feature restoration failed')

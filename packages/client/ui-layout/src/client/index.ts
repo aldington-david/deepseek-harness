@@ -22,6 +22,7 @@ import { en, zh } from './shortcut-locales.ts'
 import { ThemePresenter } from './theme-presenter.ts'
 import { WebViewController } from './web-view.ts'
 import type { ViewMode } from './web-view.ts'
+import { en as webEn, zh as webZh } from './web-view-locales.ts'
 
 // Contract exports only (export-convergence rule: cross-package consumers
 // keep a symbol exported; test-only/package-internal symbols live off /src).
@@ -45,6 +46,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Layout keyboard command labels. */
     'shortcuts.layout': keyof typeof zh
+    /** Original-frame host-operation outcomes. */
+    'layout.web': keyof typeof webEn
   }
 
   interface GlobalStandardProps {
@@ -156,6 +159,7 @@ export const inject = ['slots', 'theme', 'locale', 'shortcuts']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register('shortcuts.layout', { zh, en }), 'layout: command labels')
+  ctx.effect(() => ctx.locale.register('layout.web', { zh: webZh, en: webEn }), 'layout: host-operation messages')
   const t = ctx.locale.bind('shortcuts.layout')
 
   ctx.effect(() => {
@@ -170,7 +174,7 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().panelInfo,
       subscribe: listener => instance.subscribe(listener),
     }
-    const webView = new WebViewController(instance)
+    const webView = new WebViewController(instance, ctx.locale.bind('layout.web'))
     const presenter = new ThemePresenter()
     const presentTheme = (): void => {
       const snapshot = ctx.theme.getTheme()

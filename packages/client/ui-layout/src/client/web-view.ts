@@ -1,6 +1,8 @@
 /** Trusted embedding context and private, unsaved view state for the original Web UI. */
 import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
+import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { createLayoutStore } from './stores.ts'
+import { en } from './web-view-locales.ts'
 
 /** A user's display choice; automatic follows the current host and viewport. */
 export type ViewMode = 'auto' | 'mobile' | 'desktop'
@@ -71,8 +73,30 @@ export interface WebViewState {
   remember(key: string, value: unknown): void
 }
 
+/** Complete user-requested JSON export, without authentication or model context. */
+export interface WebDownload {
+  /** Download filename, not a filesystem path. */
+  name: string
+  /** Complete serialized JSON, preserving numeric strings and original fields. */
+  text: string
+  /** The only content type accepted by this export adapter. */
+  mimeType: 'application/json'
+}
+
 /** Original-page presentation and explicitly registered private view state. */
 export interface WebView extends WebViewState {
+  /**
+   * Ask the trusted host to open a user-selected HTTP(S) link.
+   * @param url - Address without embedded credentials; no authentication headers are forwarded.
+   * @returns Completion or a reported host failure.
+   */
+  openLink(url: string): Promise<void>
+  /**
+   * Download complete JSON through the trusted host's file API.
+   * @param file - User-requested export content.
+   * @returns Completion or a reported host failure.
+   */
+  downloadFile(file: WebDownload): Promise<void>
   /** @returns The stable current presentation snapshot. */
   getSnapshot(): ViewPresentation
   /**
@@ -96,6 +120,7 @@ export interface WebView extends WebViewState {
 }
 
 type LayoutInstance = ReturnType<ReturnType<typeof createLayoutStore>['create']>
+type PendingHostRequest = { resolve: () => void; reject: (error: Error) => void }
 
 /** Owns one frame's trusted message listener and private view snapshots. */
 export class WebViewController implements WebView {
@@ -108,9 +133,14 @@ export class WebViewController implements WebView {
   private viewState: Record<string, unknown> = {}
   private page: string | undefined
   private readonly restoreListeners = new Set<(state: Record<string, unknown>, initialPage?: string) => void>()
+  private readonly hostRequests = new Map<string, PendingHostRequest>()
+  private readonly onPageHide = (): void => { this.dispose() }
 
-  /** @param instance - The same declared store instance used by the root frame. */
-  constructor(private readonly instance: LayoutInstance) {
+  /**
+   * @param instance - The same declared store instance used by the root frame.
+   * @param text - Localized host-operation messages.
+   */
+  constructor(private readonly instance: LayoutInstance, private readonly text: (key: keyof typeof en) => string = key => en[key]) {
     const origins = (globalThis as { __DSH_EMBED_ORIGINS__?: unknown }).__DSH_EMBED_ORIGINS__
     const requested = new URLSearchParams(location.search).get('dsh_embed_origin')
     this.origin = window.parent !== window && requested !== null && Array.isArray(origins) && origins.includes(requested)
@@ -141,6 +171,66 @@ export class WebViewController implements WebView {
       previous = current
     })
     window.addEventListener('message', this.receive)
+    if (this.origin !== undefined) {
+      window.addEventListener('pagehide', this.onPageHide)
+      document.addEventListener('click', this.openClickedLink)
+      document.addEventListener('auxclick', this.openClickedLink)
+    }
+  }
+
+  /** @param url - User-selected HTTP(S) address. @returns The host operation result. */
+  openLink = async (url: string): Promise<void> => {
+    try {
+      const target = new URL(url, location.href)
+      if (!['https:', 'http:'].includes(target.protocol) || target.username || target.password) throw new Error(this.text('invalidLink'))
+      await this.requestHost('open-link', { url: target.href })
+    } catch (error) { throw this.reportActionFailure(error) }
+  }
+
+  /** @param file - Complete JSON export. @returns The host operation result. */
+  downloadFile = async (file: WebDownload): Promise<void> => {
+    try {
+      if (!file || typeof file.name !== 'string' || !file.name || /[\\/\u0000-\u001f\u007f]/.test(file.name)
+        || typeof file.text !== 'string' || file.mimeType !== 'application/json') throw new Error(this.text('invalidFile'))
+      await this.requestHost('download-file', { name: file.name, text: file.text, mimeType: file.mimeType })
+    } catch (error) { throw this.reportActionFailure(error) }
+  }
+
+  private reportActionFailure(error: unknown): Error {
+    const failure = error instanceof Error ? error : new Error(String(error))
+    if (!this.disposed) this.instance.actions.reportWebActionError(failure.message)
+    return failure
+  }
+
+  private requestHost(action: 'open-link' | 'download-file', payload: object): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error(this.text('closed')))
+    const origin = this.origin
+    if (origin === undefined || !this.getSnapshot().ready) return Promise.reject(new Error(this.text('unavailable')))
+    this.instance.actions.reportWebActionError(null)
+    const requestId = randomUUID()
+    return new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error): void => {
+        clearTimeout(timer)
+        this.hostRequests.delete(requestId)
+        if (error === undefined) resolve()
+        else reject(error)
+      }
+      const timer = setTimeout(() => { finish(new Error(this.text('timeout'))) }, 65000)
+      this.hostRequests.set(requestId, { resolve: () => { finish() }, reject: finish })
+      try {
+        window.parent.postMessage({ type: 'dsh:web-host-request', version: 1, requestId, action, payload }, origin)
+      } catch (error) { finish(error instanceof Error ? error : new Error(String(error))) }
+    })
+  }
+
+  private openClickedLink = (event: MouseEvent): void => {
+    if (this.disposed || this.origin === undefined || !this.getSnapshot().ready || event.defaultPrevented || event.button > 1) return
+    const link = event.target instanceof Element ? event.target.closest('a[href]') : null
+    if (!(link instanceof HTMLAnchorElement) || link.target !== '_blank' && !link.hasAttribute('download')) return
+    const url = new URL(link.href, location.href)
+    if (!['http:', 'https:'].includes(url.protocol)) return
+    event.preventDefault()
+    void this.openLink(url.href).catch(() => { /* The frame presents the failure; a click has no promise consumer. */ })
   }
 
   /** @returns The stable presentation snapshot consumed by framework-bound hooks. */
@@ -189,7 +279,16 @@ export class WebViewController implements WebView {
   private receive = (event: MessageEvent<unknown>): void => {
     if (this.disposed || this.origin === undefined || event.source !== window.parent || event.origin !== this.origin) return
     const message = event.data
-    if (!record(message) || message.type !== 'dsh:web-context' || message.version !== 1 || !record(message.context)) return
+    if (!record(message) || message.version !== 1) return
+    if (message.type === 'dsh:web-host-result') {
+      if (typeof message.requestId !== 'string' || typeof message.ok !== 'boolean') return
+      const pending = this.hostRequests.get(message.requestId)
+      if (pending === undefined) return
+      if (message.ok) pending.resolve()
+      else if (typeof message.error === 'string' && message.error) pending.reject(new Error(message.error))
+      return
+    }
+    if (message.type !== 'dsh:web-context' || !record(message.context)) return
     const value = message.context
     if (value.displayMode !== 'inline' && value.displayMode !== 'fullscreen') return
     if (value.platform !== undefined && value.platform !== 'web' && value.platform !== 'desktop' && value.platform !== 'mobile') return
@@ -236,5 +335,9 @@ export class WebViewController implements WebView {
     this.off()
     this.restoreListeners.clear()
     window.removeEventListener('message', this.receive)
+    window.removeEventListener('pagehide', this.onPageHide)
+    document.removeEventListener('click', this.openClickedLink)
+    document.removeEventListener('auxclick', this.openClickedLink)
+    for (const pending of [...this.hostRequests.values()]) pending.reject(new Error(this.text('closed')))
   }
 }

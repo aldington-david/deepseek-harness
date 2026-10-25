@@ -23,6 +23,7 @@ type LayoutState = {
   layoutInfo: LayoutInfo
   presentation: ViewPresentation
   webViewMounted: boolean
+  webActionError: string | null
 }
 
 type LayoutInfo = {
@@ -73,6 +74,7 @@ type LayoutActions = {
   receiveWebContext: (draft: LayoutState, context: WebContext, preferences?: Partial<Record<ViewScope, ViewMode>>) => void
   chooseViewMode: (draft: LayoutState, mode: ViewMode) => void
   seedViewPreferences: (draft: LayoutState, preferences: Partial<Record<ViewScope, ViewMode>>) => void
+  reportWebActionError: (draft: LayoutState, message: string | null) => void
 }
 
 /**
@@ -90,6 +92,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       panelInfo: { activePanelId: null },
       presentation: initialPresentation(),
       webViewMounted: false,
+      webActionError: null,
       layoutInfo: {
         sidebar: SIDEBAR_DEFAULT,
         viewportWidth: window.innerWidth,
@@ -102,6 +105,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       },
     }),
     actions: {
+      reportWebActionError: (d, message: string | null) => { d.webActionError = message },
       selectPanel: (d, panelId: MainPanelId | null) => {
         d.panelInfo.activePanelId = panelId
         if (phonePresentation(d.presentation, d.layoutInfo.viewportWidth)) d.layoutInfo.narrowExpanded = false

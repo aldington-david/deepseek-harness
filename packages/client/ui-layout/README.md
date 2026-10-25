@@ -40,6 +40,8 @@ Embedding is enabled only when the page is nested and `dsh_embed_origin` names a
 
 `ctx.layout.webView` lets feature plugins read and remember named private view snapshots and register an initial restoration callback. The carrier owns these opaque snapshots; they are not durable business records or layout-store data. Selection and display preferences accompany `dsh:web-view-state` messages to the trusted parent. Features decide what to capture and validate, and must exclude credentials and pending mutations. Host safe-area insets protect frame content. A supplied host theme affects only the System theme choice, without changing the saved preference.
 
+In a trusted embed, `webView.openLink(url)` and `webView.downloadFile({ name, text, mimeType: 'application/json' })` request user-initiated browser operations from the carrier. HTTP(S) links retain their URL, including protected resource addresses; authentication headers and login credentials are never added. JSON exports retain their complete text. Each v1 request has a correlated result checked against the trusted parent, and host refusal or a 65-second timeout appears in the original frame. Disposal rejects pending requests without replay. These operations stay out of private view snapshots and model context. Ordinary top-level pages keep their existing browser open and download behavior.
+
 <a id="window-chrome-seat"></a>
 ### Window-chrome seat
 

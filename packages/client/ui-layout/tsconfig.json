@@ -12,6 +12,9 @@
       "path": "../../util/brand"
     },
     {
+      "path": "../../util/crypto"
+    },
+    {
       "path": "../../../vendor/cordis"
     },
     {

@@ -181,6 +181,8 @@ export interface BrowserMountRequest {
 
 /** Plain Slot callbacks and a framework-bound state source, not a desktop protocol. */
 export interface BrowserInjected {
+  /** @param url - Known HTTP(S) target to open outside the sidebar through the original frame. */
+  openExternalLink?: (url: string) => void
   readonly keyedHooks: {
     readonly browserState: (key: string) => HostObservable<BrowserControllerState> | undefined
   }
