@@ -339,7 +339,7 @@ describe('profile reconciliation settlement', () => {
     const release = Promise.withResolvers<undefined>()
     const cleanup = Promise.withResolvers<undefined>()
     const probe = {
-      stopping: () => stopping.resolve(undefined), cleanup: cleanup.promise, current: Promise.resolve<unknown>(undefined),
+      stopping: () => { stopping.resolve(undefined) }, cleanup: cleanup.promise, current: Promise.resolve<unknown>(undefined),
     }
     writeFileSync(join(dir, 'cordis.yml'), '[]\n')
     writeFileSync(join(dir, 'caller.mjs'), [

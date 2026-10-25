@@ -331,7 +331,7 @@ async function recompose(
 ): Promise<ProfileRecomposition> {
   const { requiredIds = [], running = [] } = options
   const lifetime = new AbortController()
-  const dispose = ctx.effect(() => () => lifetime.abort(new Error(`${binName}: profile recomposition interrupted by shutdown`)), 'profile recomposition')
+  const dispose = ctx.effect(() => () => { lifetime.abort(new Error(`${binName}: profile recomposition interrupted by shutdown`)) }, 'profile recomposition')
   const wait = async <T>(operation: Promise<T>): Promise<T> => {
     const stopped = Promise.withResolvers<never>()
     const abort = () => { stopped.reject(lifetime.signal.reason) }
