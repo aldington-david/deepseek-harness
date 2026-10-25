@@ -77,7 +77,7 @@ export const Config: z<Config> = z.object({
 
 /** Trust surface consumed here; the browser-side connection package owns the full type. */
 interface OpenInAppConnection {
-  requestRejection(request: { readonly headers: IncomingMessage['headers'] }): 401 | 403 | undefined
+  requestRejection(request: { readonly headers: IncomingMessage['headers'] }): Promise<401 | 403 | undefined>
 }
 
 /** The composition's connection service (typed locally: its package is browser-side). */
@@ -182,8 +182,8 @@ export function apply(ctx: Context, config: Config): void {
     return fresh
   }
   /** Answer an untrusted/unauthenticated request; true when it was rejected. */
-  const rejected = (req: IncomingMessage, res: ServerResponse): boolean => {
-    const rejection = connectionOf(ctx).requestRejection(req)
+  const rejected = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+    const rejection = await connectionOf(ctx).requestRejection(req)
     if (rejection === undefined) return false
     res.statusCode = rejection
     res.end()
@@ -194,7 +194,7 @@ export function apply(ctx: Context, config: Config): void {
     kind: 'exact',
     path: OPEN_IN_APP_APPS_PATH,
     handler: async (req, res) => {
-      if (rejected(req, res)) return
+      if (await rejected(req, res)) return
       if (req.method !== 'GET') {
         sendMethodNotAllowed(res, 'GET')
         return
@@ -207,7 +207,7 @@ export function apply(ctx: Context, config: Config): void {
     kind: 'prefix',
     path: OPEN_IN_APP_ICON_PREFIX_PATH,
     handler: async (req, res) => {
-      if (rejected(req, res)) return
+      if (await rejected(req, res)) return
       if (req.method !== 'GET') {
         sendMethodNotAllowed(res, 'GET')
         return
@@ -242,7 +242,7 @@ export function apply(ctx: Context, config: Config): void {
     kind: 'exact',
     path: OPEN_IN_APP_OPEN_PATH,
     handler: async (req, res) => {
-      if (rejected(req, res)) return
+      if (await rejected(req, res)) return
       if (req.method !== 'POST') {
         sendMethodNotAllowed(res, 'POST')
         return

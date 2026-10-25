@@ -211,7 +211,7 @@ export interface HostConnectionHandle {
    * @param request - request headers from the HTTP or upgrade request.
    * @returns rejection status, or undefined when the route may accept the request.
    */
-  requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
+  requestRejection(request: ConnectionTrustRequest): Promise<ConnectionRequestRejection>
 
   /**
    * Admit one request: it passes {@link requestRejection} and speaks for the
@@ -219,7 +219,7 @@ export interface HostConnectionHandle {
    * @param request - request headers from the HTTP or upgrade request.
    * @returns the operator Peer, or the rejection status.
    */
-  admit(request: ConnectionTrustRequest): PeerAdmission
+  admit(request: ConnectionTrustRequest): Promise<PeerAdmission>
 
   /**
    * Authenticate one frontend index request, owning a token redirect or 401.
@@ -227,7 +227,7 @@ export interface HostConnectionHandle {
    * @param response - response owned when the result is false.
    * @returns true only when the frontend may serve index.html.
    */
-  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
+  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean>
 
   /**
    * Add the fresh process token to an ordinary Web application URL.

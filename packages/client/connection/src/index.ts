@@ -57,6 +57,14 @@ export const name = 'client-connection'
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /**
+     * Authenticate a declared external Web origin before native browser sessions.
+     * Return undefined for origins this authenticator does not own.
+     * @param request - HTTP or WebSocket upgrade request facts.
+     * @param next - Delegate to the next authenticator.
+     * @mode waterfall
+     */
+    'connection/authenticate'(request: import('./rpc.ts').ConnectionTrustRequest, next: () => Promise<boolean | undefined>): Promise<boolean | undefined>
+    /**
      * Admit or wrap an authenticated shared API request, including body transfer.
      * Existing requests continue when a listener refuses subsequent requests.
      * @param request - Authenticated incoming HTTP request.
@@ -146,7 +154,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       kind: 'prefix',
       path: API_PATH,
       handler: async (req, res) => {
-        const admission = connection.admit(req)
+        const admission = await connection.admit(req)
         if ('rejection' in admission) {
           res.writeHead(admission.rejection)
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')

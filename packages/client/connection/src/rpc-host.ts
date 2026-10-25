@@ -101,20 +101,26 @@ export class HostConnectionService extends Service implements HostConnectionHand
   }
 
   /** Apply the configured Host/Origin fence, then browser authentication. */
-  requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
+  async requestRejection(request: ConnectionTrustRequest): Promise<ConnectionRequestRejection> {
     if (!isTrustedApiRequest(request, this.trustedHosts)) return 403
-    return this.browserAuth.isAuthenticated(request) ? undefined : 401
+    const external = await this.ctx.waterfall('connection/authenticate', request, async () => undefined)
+    return (external ?? this.browserAuth.isAuthenticated(request)) ? undefined : 401
   }
 
   /** A request that passes the fence and authentication speaks for the operator. */
-  admit(request: ConnectionTrustRequest): PeerAdmission {
-    const rejection = this.requestRejection(request)
+  async admit(request: ConnectionTrustRequest): Promise<PeerAdmission> {
+    const rejection = await this.requestRejection(request)
     return rejection === undefined ? { peer: this.operator } : { rejection }
   }
 
   /** Authenticate an index request through the process-token exchange or cookie. */
-  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
-    return this.browserAuth.authorizeIndex(request, response)
+  async authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean> {
+    const external = await this.ctx.waterfall('connection/authenticate', request, async () => undefined)
+    if (external === undefined) return this.browserAuth.authorizeIndex(request, response)
+    if (external) return true
+    response.writeHead(401, { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' })
+    response.end(request.method === 'HEAD' ? undefined : 'dsh web authentication required\n')
+    return false
   }
 
   /** Add this process's launch token to the clean application URL. */
@@ -179,7 +185,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
       kind: 'prefix',
       path: channel,
       handler: async (req, res) => {
-        const admission = this.admit(req)
+        const admission = await this.admit(req)
         if ('rejection' in admission) {
           res.writeHead(admission.rejection)
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')
