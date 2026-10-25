@@ -48,6 +48,8 @@ Application-owned authenticators register `connection/authenticate`. They return
 
 Authenticated shared HTTP requests pass through the `connection/request` waterfall before body transfer. A listener may refuse new requests or await `next()` through response completion; removing its owning fiber removes admission behavior. Desktop uses this hook to lock new API work during an approved installation without canceling already-admitted work. Client disconnection aborts the handler signal; the bridge stops socket writes and drains any remaining response chunks. WebSocket stream ownership remains with API Gateway.
 
+`frameAncestors` lists additional exact HTTP(S) origins allowed to embed Host-served HTML; wildcards, URL paths and credentials are rejected. The default is empty and preserves the composing page's existing embedding policy. A deployment can inject `__DSH_MANAGED_ORIGIN__` for its authenticated Web origin; an exact match exposes `canManageHost` to settings consumers without changing `isLoopback`. This UI persistence flag does not authenticate requests.
+
 <a id="connection-generation"></a>
 ## Connection generation
 

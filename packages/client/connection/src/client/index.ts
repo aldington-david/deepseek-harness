@@ -110,11 +110,13 @@ export interface ClientTransportHooks {
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: ClientTransportHooks
   __DSH_CONNECTION_RECOVERY__?: unknown
+  __DSH_MANAGED_ORIGIN__?: unknown
 }
 
 /** Browser location fields used to classify loopback authority. */
 export interface ConnectionLocation {
   readonly hostname: string
+  readonly origin?: string
 }
 
 /** Instance-local inputs for installing a Connection service. */
@@ -125,6 +127,8 @@ export interface ConnectionInstallOptions {
   readonly recovery?: ConnectionRecoveryConfig
   /** Page location; omit for a non-browser composition. */
   readonly location?: ConnectionLocation
+  /** Authenticated Web origin whose UI may edit the connected Host's settings. */
+  readonly managedOrigin?: string
 }
 
 /**
@@ -138,6 +142,8 @@ export interface ConnectionHandle {
    * ({@link ClientTransportHooks.ownsHost}), or the context is not a browser.
    */
   readonly isLoopback: boolean
+  /** Present for the explicitly configured managed Web origin; it does not change loopback identity. */
+  readonly canManageHost?: boolean
   /** Current Remote event generation and the Host facts carried by its opening frame. */
   readonly generation: ConnectionGenerationState
   /** Current recovery lifecycle for connection-specific consumers. */
@@ -246,6 +252,7 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
   }
   const handle: ConnectionHandle = {
     isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    ...(pageLocation?.origin !== undefined && pageLocation.origin === options.managedOrigin ? { canManageHost: true } : {}),
     generation: {
       getSnapshot: () => generation,
       subscribe: (listener) => {
@@ -321,6 +328,7 @@ export function apply(ctx: Context): void {
   installConnection(ctx, {
     ...(transport === undefined ? {} : { transport }),
     recovery: resolveConnectionConfig(globals.__DSH_CONNECTION_RECOVERY__),
+    ...(typeof globals.__DSH_MANAGED_ORIGIN__ === 'string' ? { managedOrigin: globals.__DSH_MANAGED_ORIGIN__ } : {}),
     ...(pageLocation === undefined ? {} : { location: pageLocation }),
   })
 }

@@ -73,6 +73,22 @@ async function mount(): Promise<ConnectionHandle> {
 }
 
 describe('connection client apply', () => {
+  it('allows Host settings at the declared managed Web origin without claiming loopback', async () => {
+    vi.stubGlobal('location', { hostname: 'workbench.example', origin: 'https://workbench.example' })
+    vi.stubGlobal('__DSH_MANAGED_ORIGIN__', 'https://workbench.example')
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(false)
+    expect(handle.canManageHost).toBe(true)
+  })
+
+  it('keeps other remote origins outside Host settings', async () => {
+    vi.stubGlobal('location', { hostname: 'other.example', origin: 'https://other.example' })
+    vi.stubGlobal('__DSH_MANAGED_ORIGIN__', 'https://workbench.example')
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(false)
+    expect(handle.canManageHost).not.toBe(true)
+  })
+
   it('uses Host bootstrap timing when Gateway starts without overrides', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('__DSH_CONNECTION_RECOVERY__', {

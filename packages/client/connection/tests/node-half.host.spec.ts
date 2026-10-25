@@ -127,6 +127,12 @@ async function browserCookie(connection: HostConnectionHandle, authority: string
 }
 
 describe('connection node half', () => {
+  it('refuses wildcard and path-shaped embedding origins before publishing Connection', async () => {
+    for (const frameAncestor of ['https://*.example', 'https://widget.example/path']) {
+      await expect(mounted({ frameAncestors: [frameAncestor] })).rejects.toThrow('exact HTTP(S) origins')
+    }
+  })
+
   it('awaits an external browser authenticator and withdraws it with its owner', async () => {
     const { ctx, routes, connection, dispose } = await mounted({ trustedHosts: ['workbench.example'] })
     const credentialReady = Promise.withResolvers<boolean | undefined>()

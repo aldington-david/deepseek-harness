@@ -71,11 +71,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
    * @param browserAuth - process token and persistent browser-session owner.
+   * @param frameAncestors - exact additional origins permitted to embed Host HTML.
    */
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    readonly frameAncestors: readonly string[] = [],
   ) {
     super(ctx, 'connection')
     this.operator = new OperatorPeer(ctx)

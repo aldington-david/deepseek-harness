@@ -191,6 +191,8 @@ export interface HostConnectionRpc {
 
 /** Host `ctx.connection` members consumed by transport-independent adapters. */
 export interface HostConnectionHandle {
+  /** Additional exact origins explicitly allowed to embed Host-served HTML. */
+  readonly frameAncestors?: readonly string[]
   /** Generic RPC channel registry. */
   readonly rpc: HostConnectionRpc
   /** Exact Fetch routes for streaming or browser-native responses. */

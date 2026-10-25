@@ -48,6 +48,8 @@ cookie 签名密钥是 `ctx.credentials` 中由 `client-connection/browser-sessi
 
 通过认证的共享 HTTP 请求在传输请求体之前经过 `connection/request` waterfall。监听器可以拒绝新请求，或等待 `next()` 直到响应完成；释放所属 fiber 会移除准入行为。Desktop 使用此扩展点，在已批准的安装期间锁住新的 API 工作，而不取消已接纳的工作。客户端断开会中止处理函数的信号；桥接器停止写入 socket，并排空剩余响应块。WebSocket 流仍由 API Gateway 负责。
 
+`frameAncestors` 指定额外允许嵌入 Host HTML 的精确 HTTP(S) 来源，不接受通配符、URL 路径或凭据。默认空列表保留原页面的嵌入策略。部署可为已认证的 Web 来源注入 `__DSH_MANAGED_ORIGIN__`；当前来源精确匹配时向设置使用方提供 `canManageHost`，不改变 `isLoopback`。该 UI 持久化标记不负责请求认证。
+
 <a id="connection-generation"></a>
 ## Connection generation
 
