@@ -17,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const close of cleanups.splice(0)) close()
   history.replaceState({}, '', '/')
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -33,6 +34,42 @@ function context(payload: object, source = window.parent, from = origin) {
 }
 
 describe('embedded original Web view', () => {
+  it('reports a failing restoration subscriber while restoring later features and completing frame readiness', () => {
+    const { instance, view } = start()
+    const failure = new Error('feature restoration failed')
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const preventUnhandled = (event: ErrorEvent): void => { event.preventDefault() }
+    window.addEventListener('error', preventUnhandled)
+    cleanups.push(() => { window.removeEventListener('error', preventUnhandled) })
+    view.onRestore(() => { throw failure })
+    const restored = vi.fn()
+    view.onRestore(restored)
+    instance.actions.mountWebView()
+    const state = { journal: { draft: 'retained' } }
+    context({ context: { displayMode: 'inline' }, initialPage: 'journal', viewState: state })
+    expect(restored).toHaveBeenCalledExactlyOnceWith(state, 'journal')
+    expect(view.getSnapshot()).toMatchObject({ ready: true, scope: 'inline' })
+    expect(report).toHaveBeenCalledExactlyOnceWith('[ui-layout] Web view restoration subscriber failed:', failure)
+    context({ context: { displayMode: 'fullscreen' } })
+    expect(restored).toHaveBeenCalledTimes(1)
+    expect(view.getSnapshot().scope).toBe('fullscreen')
+  })
+
+  it('isolates a late subscriber failure without interrupting activation or later subscriptions', () => {
+    const { view } = start()
+    context({ context: { displayMode: 'inline' }, initialPage: 'analysis', viewState: { analysis: { view: 'research' } } })
+    const failure = new Error('late restoration failed')
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(() => view.onRestore(() => { throw failure })).not.toThrow()
+    const restored = vi.fn()
+    const unsubscribe = view.onRestore(restored)
+    expect(restored).toHaveBeenCalledExactlyOnceWith({ analysis: { view: 'research' } }, 'analysis')
+    expect(report).toHaveBeenCalledExactlyOnceWith('[ui-layout] Web view restoration subscriber failed:', failure)
+    unsubscribe()
+    view.chooseMode('desktop')
+    expect(view.getSnapshot()).toMatchObject({ ready: true, preferences: { inline: 'desktop' } })
+  })
+
   it('waits for the trusted parent before exposing restored inputs, then ignores later restoration payloads', () => {
     const { instance, view } = start()
     expect(view.getSnapshot().ready).toBe(false)

@@ -1,4 +1,5 @@
 /** Trusted embedding context and private, unsaved view state for the original Web UI. */
+import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
 import type { createLayoutStore } from './stores.ts'
 
 /** A user's display choice; automatic follows the current host and viewport. */
@@ -87,6 +88,7 @@ export interface WebView extends WebViewState {
   seedPreferences(preferences: Partial<Record<ViewScope, ViewMode>>): void
   /**
    * Register before feature content mounts; invoke immediately when already restored.
+   * Callback failures are reported without blocking other features or frame readiness.
    * @param listener - Feature-owned validation and restoration callback.
    * @returns Listener cleanup.
    */
@@ -173,13 +175,14 @@ export class WebViewController implements WebView {
   }
   /**
    * Register initial restoration before feature content mounts; invoke immediately if already restored.
+   * Callback failures are reported without interrupting subscription registration.
    * @param listener - Feature-owned validation and restoration callback.
    * @returns Listener cleanup.
    */
   onRestore = (listener: (state: Record<string, unknown>, initialPage?: string) => void): (() => void) => {
     this.restoreListeners.add(listener)
     const current = this.getSnapshot()
-    if (current.embedded && current.ready) listener(this.viewState, this.page)
+    if (current.embedded && current.ready) notifySubscribers([listener], '[ui-layout] Web view restoration', this.viewState, this.page)
     return () => { this.restoreListeners.delete(listener) }
   }
 
@@ -212,7 +215,7 @@ export class WebViewController implements WebView {
         for (const scope of scopes) if (isViewMode(layout.preferences[scope])) preferences[scope] = layout.preferences[scope]
       }
       Object.assign(this.savedPreferences, preferences)
-      for (const restore of this.restoreListeners) restore(this.viewState, this.page)
+      notifySubscribers(this.restoreListeners, '[ui-layout] Web view restoration', this.viewState, this.page)
     }
     this.instance.actions.receiveWebContext(context, first ? preferences : undefined)
   }
