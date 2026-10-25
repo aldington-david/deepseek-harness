@@ -9,6 +9,10 @@ export const zh = {
   'panels.label': '全局面板',
   'panels.home': '打开主面板',
   'assistant.label': '研究助手',
+  'layout.label': '界面布局',
+  'layout.auto': '自动',
+  'layout.mobile': '手机',
+  'layout.desktop': '电脑',
 } satisfies Record<string, string>
 
 /** The sidebar namespace key union. */
@@ -23,4 +27,8 @@ export const en = {
   'panels.label': 'Global panels',
   'panels.home': 'Open main panel',
   'assistant.label': 'Research assistant',
+  'layout.label': 'Interface layout',
+  'layout.auto': 'Auto',
+  'layout.mobile': 'Phone',
+  'layout.desktop': 'Desktop',
 } satisfies Record<SidebarKey, string>

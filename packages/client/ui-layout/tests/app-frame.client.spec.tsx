@@ -183,6 +183,24 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
+  it('uses a phone drawer for inline or mobile hosts while keeping the mounted main content', () => {
+    const { instance, frame, sidebarOwner, getByTestId, getByRole } = mountFrame()
+    const main = getByTestId('main-content')
+    act(() => { instance.actions.receiveWebContext({ displayMode: 'inline', platform: 'desktop' }) })
+    expect(sidebarOwner().collapsed).toBe(true)
+    act(() => { instance.actions.toggleSidebar() })
+    expect(sidebarOwner().collapsed).toBe(false)
+    expect(tracks(frame)[0]).toBe(56)
+    act(() => { getByRole('button', { name: 'close' }).click() })
+    expect(sidebarOwner().collapsed).toBe(true)
+    act(() => { instance.actions.receiveWebContext({ displayMode: 'fullscreen', platform: 'mobile' }) })
+    expect(sidebarOwner().collapsed).toBe(true)
+    act(() => { sidebarOwner().chooseViewMode?.('desktop') })
+    expect(sidebarOwner().viewMode).toBe('desktop')
+    expect(sidebarOwner().collapsed).toBe(false)
+    expect(getByTestId('main-content')).toBe(main)
+  })
+
   it('localizes the product title without a configured build title', () => {
     mountFrame()
     expect(document.title).toBe('DSH Local Build')
@@ -204,7 +222,7 @@ describe('AppFrame', () => {
   it('renders owner props for the default sidebar and prospective right panel', () => {
     const { frame, rightOwner, sidebarOwner, slotCalls } = mountFrame()
     expect(tracks(frame)).toEqual([280, 0])
-    expect(sidebarOwner()).toEqual({ collapsed: false, width: 280 })
+    expect(sidebarOwner()).toMatchObject({ collapsed: false, width: 280, viewMode: 'auto' })
     expect(rightOwner()).toEqual({ width: 864, viewportWidth: 1920, canShow: true })
     expect(slotCalls.find(c => c.key === 'main')).toEqual({ key: 'main', props: {}, options: { entryKey: 'conversation' } })
   })
@@ -245,7 +263,7 @@ describe('AppFrame', () => {
     const { frame, instance, sidebarOwner, getByTestId, queryByTestId } = mountFrame()
     act(() => { instance.actions.toggleSidebar() })
     expect(tracks(frame)).toEqual([56, 0])
-    expect(sidebarOwner()).toEqual({ collapsed: true, width: 56 })
+    expect(sidebarOwner()).toMatchObject({ collapsed: true, width: 56, viewMode: 'auto' })
     expect(getByTestId('sidebar-content')).toBeTruthy()
     expect(frame.querySelector('[data-side="sidebar"]')).toBeNull()
     // The rail keeps the window chrome housed: no shell.leading seat.
@@ -262,7 +280,7 @@ describe('AppFrame', () => {
     expect(queryByTestId('shell.leading-content')).toBeNull()
     act(() => { instance.actions.toggleSidebar() })
     expect(tracks(frame)).toEqual([0, 0])
-    expect(sidebarOwner()).toEqual({ collapsed: true, width: 0 })
+    expect(sidebarOwner()).toMatchObject({ collapsed: true, width: 0, viewMode: 'auto' })
     expect(frame.querySelector('[data-shell-leading]')).not.toBeNull()
     expect(queryByTestId('shell.leading-content')).toBeTruthy()
     act(() => { instance.actions.toggleSidebar() })
@@ -334,11 +352,20 @@ describe('AppFrame normal width concessions', () => {
     expect(rightOwner().canShow).toBe(true)
   })
 
-  it.each([[756, 300, true], [755, 0, false]] as const)('reports eligibility at %ipx', (width, rightbar, canShow) => {
+  it.each([[756, 300, true], [755, 0, false]] as const)('reports desktop eligibility at %ipx', (width, rightbar, canShow) => {
     frameWidth = width
     const { instance, rightOwner } = mountFrame()
-    act(() => { instance.actions.toggleSidebar() })
+    act(() => { instance.actions.chooseViewMode('desktop'); instance.actions.toggleSidebar() })
     expect(rightOwner()).toEqual({ width: rightbar, viewportWidth: width, canShow })
+  })
+
+  it('keeps the right panel available as an overlay in phone presentation', () => {
+    frameWidth = 390
+    const { instance, rightOwner, frame } = mountFrame()
+    expect(rightOwner()).toEqual({ width: 390, viewportWidth: 390, canShow: true })
+    act(() => { instance.actions.openRightbar(true, false) })
+    expect(tracks(frame)).toEqual([56, 0])
+    expect(frame.querySelector('[data-side="rightbar"]')).toBeNull()
   })
 
   it('does not anticipate another left collapse after the right panel is already shown', () => {
@@ -506,7 +533,7 @@ describe('AppFrame right panel presentation', () => {
   it('retains fullscreen without a track when normal columns cannot fit', () => {
     frameWidth = 700
     const { frame, instance, rightOwner } = mountFrame()
-    act(() => { instance.actions.openRightbar(false, true) })
+    act(() => { instance.actions.chooseViewMode('desktop'); instance.actions.openRightbar(false, true) })
     expect(tracks(frame)).toEqual([56, 0])
     expect(rightOwner()).toEqual({ width: 0, viewportWidth: 700, canShow: false })
     expect(instance.getSnapshot().layoutInfo.rightbarShown).toBe(true)
