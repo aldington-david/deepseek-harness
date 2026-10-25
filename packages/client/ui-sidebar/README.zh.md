@@ -29,6 +29,8 @@ dsh Web 客户端的侧边栏默认采用会话优先导航。Profile 可以选�
 
 侧边栏是导航外壳：用户看到品牌、启动新会话、折叠轨道并到达 Settings。功能插件填充它的席位——ui-workspace 填充 `sidebar.workspaces`，ui-settings 在 `sidebar.settings` 注册触发行与设置面板。
 
+布局 owner 提供显示控件时，侧栏底部使用共享 Menu 提供自动、手机和电脑选项，直接调整原框架的呈现，不替换页面。手机布局的主要侧栏控件至少高 48px；抽屉几何与宿主默认规则由 [ui-layout](../ui-layout/README.zh.md#phone-presentation-and-trusted-embedding) 负责。
+
 <a id="navigation-policy"></a>
 ### 导航策略
 

@@ -13,6 +13,11 @@ function fakePanels(): PanelActions {
     setRightbar: vi.fn(),
     openRightbar: vi.fn(),
     closeRightbar: vi.fn(),
+    initializeWebView: vi.fn(),
+    mountWebView: vi.fn(),
+    receiveWebContext: vi.fn(),
+    chooseViewMode: vi.fn(),
+    seedViewPreferences: vi.fn(),
   }
 }
 

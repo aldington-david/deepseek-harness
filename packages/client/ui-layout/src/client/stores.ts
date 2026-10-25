@@ -4,6 +4,8 @@
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { MainPanelId } from './service.ts'
+import { initialPresentation, isViewMode, phonePresentation } from './web-view.ts'
+import type { ViewMode, ViewPresentation, ViewScope, WebContext } from './web-view.ts'
 import {
   clampWidth, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN,
   SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN,
@@ -19,6 +21,8 @@ type LayoutState = {
     activePanelId: MainPanelId | null
   }
   layoutInfo: LayoutInfo
+  presentation: ViewPresentation
+  webViewMounted: boolean
 }
 
 type LayoutInfo = {
@@ -64,6 +68,11 @@ type LayoutActions = {
   setRightbar: (draft: LayoutState, px: number) => void
   openRightbar: (draft: LayoutState, track: boolean, fullscreen: boolean) => void
   closeRightbar: (draft: LayoutState) => void
+  initializeWebView: (draft: LayoutState, embedded: boolean, preferences: Partial<Record<ViewScope, ViewMode>>) => void
+  mountWebView: (draft: LayoutState) => void
+  receiveWebContext: (draft: LayoutState, context: WebContext, preferences?: Partial<Record<ViewScope, ViewMode>>) => void
+  chooseViewMode: (draft: LayoutState, mode: ViewMode) => void
+  seedViewPreferences: (draft: LayoutState, preferences: Partial<Record<ViewScope, ViewMode>>) => void
 }
 
 /**
@@ -79,6 +88,8 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
   const handle = defineStore({
     init: (): LayoutState => ({
       panelInfo: { activePanelId: null },
+      presentation: initialPresentation(),
+      webViewMounted: false,
       layoutInfo: {
         sidebar: SIDEBAR_DEFAULT,
         viewportWidth: window.innerWidth,
@@ -93,6 +104,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
     actions: {
       selectPanel: (d, panelId: MainPanelId | null) => {
         d.panelInfo.activePanelId = panelId
+        if (phonePresentation(d.presentation, d.layoutInfo.viewportWidth)) d.layoutInfo.narrowExpanded = false
       },
       retainMainPanels: (d, panelIds: readonly string[]) => {
         if (d.panelInfo.activePanelId !== null && !panelIds.includes(d.panelInfo.activePanelId)) {
@@ -107,8 +119,9 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       // untouched, so re-widening restores the pre-squeeze layout.
       toggleSidebar: (d) => {
         d.layoutInfo.rightbarInstant = false
-        if (d.layoutInfo.viewportWidth < SIDEBAR_AUTO_COLLAPSE) d.layoutInfo.narrowExpanded = !d.layoutInfo.narrowExpanded
-        else d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : 0
+        if (d.layoutInfo.viewportWidth < SIDEBAR_AUTO_COLLAPSE || phonePresentation(d.presentation, d.layoutInfo.viewportWidth)) {
+          d.layoutInfo.narrowExpanded = !d.layoutInfo.narrowExpanded
+        } else d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : 0
       },
       // Crossing the breakpoint in either direction drops the override: the
       // narrow default is auto-collapsed, the wide state is the preference.
@@ -139,6 +152,33 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         d.layoutInfo.rightbarShown = false
         d.layoutInfo.rightbarTrack = false
         d.layoutInfo.rightbarFullscreen = false
+      },
+      initializeWebView: (d, embedded: boolean, preferences: Partial<Record<ViewScope, ViewMode>>) => {
+        d.presentation.embedded = embedded
+        d.presentation.ready = !embedded
+        d.presentation.preferences = { ...d.presentation.preferences, ...preferences }
+      },
+      mountWebView: (d) => { d.webViewMounted = true },
+      receiveWebContext: (d, context: WebContext, preferences?: Partial<Record<ViewScope, ViewMode>>) => {
+        if (!d.presentation.ready && preferences !== undefined) {
+          d.presentation.preferences = { ...d.presentation.preferences, ...preferences }
+        }
+        if (d.presentation.scope !== context.displayMode) d.layoutInfo.narrowExpanded = false
+        d.presentation.scope = context.displayMode
+        d.presentation.platform = context.platform
+        d.presentation.theme = context.theme
+        d.presentation.safeAreaInsets = context.safeAreaInsets
+        d.presentation.ready = true
+      },
+      chooseViewMode: (d, mode: ViewMode) => {
+        d.presentation.preferences[d.presentation.scope] = mode
+        d.layoutInfo.narrowExpanded = false
+      },
+      seedViewPreferences: (d, preferences: Partial<Record<ViewScope, ViewMode>>) => {
+        for (const scope of ['native', 'inline', 'fullscreen'] as const) {
+          const value = preferences[scope]
+          if (isViewMode(value)) d.presentation.preferences[scope] = value
+        }
       },
     },
   })

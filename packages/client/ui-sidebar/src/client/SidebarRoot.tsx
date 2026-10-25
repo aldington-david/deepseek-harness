@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
   DisclosureRow, FishLogo, IconFolderOpenOutlineRegular, IconNewChatOutlineMedium, IconNewChatOutlineRegular,
-  IconPanelLeftOutlineRegular, isDarwinDesktop, ShortcutKeys, Tooltip,
+  IconPanelLeftOutlineRegular, isDarwinDesktop, Menu, ShortcutKeys, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -92,6 +92,8 @@ export function SidebarRoot({
   navigation,
   collapsed,
   width,
+  viewMode = 'auto',
+  chooseViewMode,
   startSession,
   toggleSidebar,
   selectPanel,
@@ -105,6 +107,7 @@ export function SidebarRoot({
   const panelFirst = navigation === 'panel-first'
   const homePanel = panelFirst ? panels[0] : undefined
   const [assistantOpen, setAssistantOpen] = useState(false)
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const browserOpen = !panelFirst || assistantOpen
   const toggleAssistant = useCallback(() => { setAssistantOpen(open => !open) }, [])
   const shortcut = useShortcuts(rows => rows.find(row => row.id === 'sidebar.left.toggle'))
@@ -334,6 +337,24 @@ export function SidebarRoot({
 
       {/* Footer actions stack above Settings in both sidebar widths. */}
       <div className={css.footArea}>
+        {chooseViewMode && <Menu
+          open={modeMenuOpen}
+          className={css.modeControl}
+          side="top"
+          portal
+          selectedId={viewMode}
+          anchor={<button type="button" className={css.modeButton} aria-label={t('layout.label')}
+            aria-haspopup="menu" aria-expanded={modeMenuOpen} onClick={() => { setModeMenuOpen(open => !open) }}>
+            {wide && <span>{t('layout.label')}</span>}
+            <span>{t(`layout.${viewMode}`)}</span>
+          </button>}
+          items={(['auto', 'mobile', 'desktop'] as const).map(id => ({ id, label: t(`layout.${id}`) }))}
+          onSelect={(id) => {
+            if (id === 'auto' || id === 'mobile' || id === 'desktop') chooseViewMode(id)
+            setModeMenuOpen(false)
+          }}
+          onClose={() => { setModeMenuOpen(false) }}
+        />}
         <div className={css.footerActions}>
           {renderSlot('sidebar.footer.action', { wide })}
         </div>

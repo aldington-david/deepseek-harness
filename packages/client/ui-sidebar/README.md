@@ -29,6 +29,8 @@ The dsh web client sidebar defaults to conversation-first navigation. A profile 
 
 The sidebar is the navigation shell: users see the brand, start new sessions, collapse the rail, and reach Settings. Feature plugins fill its seats — ui-workspace fills `sidebar.workspaces`, ui-settings registers the trigger row and settings panel at `sidebar.settings`.
 
+When the layout owner supplies display controls, the footer offers Auto, Phone, and Desktop through the shared Menu primitive. The selection changes the original frame's presentation without replacing the page. Phone presentation keeps primary sidebar controls at least 48px high; its drawer geometry and host defaults belong to [ui-layout](../ui-layout/README.md#phone-presentation-and-trusted-embedding).
+
 <a id="navigation-policy"></a>
 ### Navigation policy
 
