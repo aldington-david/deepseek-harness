@@ -2985,6 +2985,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['synchronously when pre-aborted or when argv, cwd, environment, or grace is invalid before handle creation.'],
       },
       {
+        signature: 'async spawnAsync(spec: SubprocessSpawnSpec): Promise<SubprocessHandle>',
+        description: 'Allocate one ordinary process through the provider\'s awaited launch path. The default delegates to synchronous spawn; providers with asynchronous prerequisites override it. Cancellation before allocation starts no target.',
+        parameters: [{ name: 'spec', description: 'the same explicit process request accepted by spawn.' }],
+        returns: 'the owned handle after allocation; validation failures reject.',
+      },
+      {
         signature: 'abstract spawnTerminal(spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle>',
         description: 'Allocate a real terminal and start one owned process session. This is the only non-pipe process primitive: implementations own terminal byte I/O, foreground groups, signals, and whole-session quiescence.',
         parameters: [{ name: 'spec', description: 'fully specified argv, cwd, environment, dimensions, grace, and allocation cancellation.' }],

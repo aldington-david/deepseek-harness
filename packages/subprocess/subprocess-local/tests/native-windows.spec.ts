@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import LocalSubprocessRuntime from '../src/index.ts'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { targetEnvironment } from '../src/runner-launch.ts'
 import { bindManagedProcess } from '../src/spawn.ts'
@@ -81,6 +83,15 @@ function directSpawnFailure(argv: readonly string[], cwd = scratch): Promise<Spa
 const windowsNative = process.platform === 'win32' && probeWindowsJob()
 
 describe.skipIf(!windowsNative)('Windows Job native containment', () => {
+  it('allocates through the awaited provider entry and joins the owned range', async () => {
+    const ctx = new Context(), fiber = await ctx.plugin(LocalSubprocessRuntime)
+    try {
+      const handle = await ctx.subprocess.spawnAsync(spec([process.execPath, '-e', 'console.log("async owned")']))
+      expect(await handle.done).toEqual({ exitCode: 0, signal: null })
+      expect(handle.collected.stdout?.readFrom(0).text.trim()).toBe('async owned')
+      await expect(handle.waitForExit()).resolves.toBe(true)
+    } finally { await fiber.dispose() }
+  }, 30_000)
   it('keeps ordinary descendants free of visible console windows', async () => {
     const fixture = fileURLToPath(new URL('../../win32-process/tests/fixtures/console-state.ts', import.meta.url))
     const script = `

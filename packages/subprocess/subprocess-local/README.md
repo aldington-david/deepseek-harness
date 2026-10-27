@@ -36,6 +36,10 @@ Load the provider in the same composition as its consumers. It has no config fie
 - name: '@deepseek-ai/dsh-bash-local'
 ```
 
+### Awaiting process allocation
+
+`spawnAsync(spec)` waits for Linux manager checks without blocking the Host event loop and retains the same native/fallback selection as `spawn`. Local native-binding checks remain synchronous; target startup uses the existing scope bootstrap or Windows Job runner. No target starts after the caller cancels or provider disposal begins, and disposal joins pending allocation before releasing process ownership. Linux normal termination and empty-scope release use asynchronous manager commands; host-exit finalization remains synchronous.
+
 ### Resolving executables
 
 Absolute executable paths are verified; bare names resolve against the scrubbed PATH with platform-aware executable extensions (`.COM`/`.EXE`/`.BAT`/`.CMD` on Windows). Relative paths containing separators are rejected — provide an absolute path or a bare PATH name — and relative PATH entries resolve from the host process cwd.

@@ -36,7 +36,9 @@ import type { LocalSubprocessHandle, SpawnInternals } from './spawn.ts'
 import {
   launchLinuxScope,
   prepareLinuxTerminalScope,
+  probeLinuxBootstrap,
   probeLinuxManager,
+  probeLinuxManagerAsync,
   probeLinuxNative,
   signalLinuxDirectProcess,
 } from './linux-scope.ts'
@@ -69,6 +71,9 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   private fallbackWarningIssued = false
   /** Positive-only cache for the expensive Linux bootstrap and scope probe. */
   private linuxDeepProbePassed = false
+  /** Pending allocation is owned before a target handle exists. */
+  private readonly allocationLifetime = new AbortController()
+  private readonly allocations = new Set<Promise<SubprocessHandle>>()
   /** Test hook for platform process inspection; production resolves lazily on terminal spawn. */
   terminalInspector: ProcessInspector | undefined
 
@@ -88,6 +93,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   private readonly reportSpillFailure = logSpillFailure(this.ctx.logger, 'subprocess-local')
 
   private terminateForHostExit(): void {
+    this.allocationLifetime.abort(new Error('subprocess provider is stopping'))
     for (const handle of this.live) {
       try {
         handle.terminateForHostExit()
@@ -105,6 +111,8 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   }
 
   private async disposeManagedProcesses(): Promise<void> {
+    this.allocationLifetime.abort(new Error('subprocess provider is stopping'))
+    await Promise.allSettled(this.allocations)
     // Request termination, then await MANAGED-RANGE exit — not just the
     // direct command's settlement — so even a surviving descendant cannot
     // outlive the fiber. Keep both sets authoritative while these waits are
@@ -183,6 +191,30 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
     validateSubprocessSpec(spec)
     const env = targetEnvironment(spec)
     const containmentMode = this.selectContainmentMode('ordinary')
+    return this.spawnManaged(spec, env, containmentMode)
+  }
+
+  /** @inheritdoc */
+  override async spawnAsync(spec: SubprocessSpawnSpec): Promise<SubprocessHandle> {
+    const allocate = async (): Promise<SubprocessHandle> => {
+      validateSubprocessSpec(spec)
+      const env = targetEnvironment(spec)
+      const signal = AbortSignal.any([this.allocationLifetime.signal, ...spec.signal === undefined ? [] : [spec.signal]])
+      signal.throwIfAborted()
+      const containmentMode = await this.selectContainmentModeAsync(signal)
+      signal.throwIfAborted()
+      return this.spawnManaged(spec, env, containmentMode)
+    }
+    const pending = allocate()
+    this.allocations.add(pending)
+    try { return await pending } finally { this.allocations.delete(pending) }
+  }
+
+  private spawnManaged(
+    spec: SubprocessSpawnSpec,
+    env: Record<string, string>,
+    containmentMode: 'linux-scope' | 'windows-job' | 'fallback',
+  ): SubprocessHandle {
     let handle: LocalSubprocessHandle
     const internals: SpawnInternals = { ...this.internals, onSpillFailure: this.reportSpillFailure }
     if (containmentMode === 'fallback') {
@@ -208,6 +240,21 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
       handle.waitForExit().then(() => { this.live.delete(handle) })
     void handle.done.then(release, release).catch(() => {})
     return handle
+  }
+
+  private async selectContainmentModeAsync(signal: AbortSignal): Promise<'linux-scope' | 'windows-job' | 'fallback'> {
+    const platform = this.internals.platform ?? process.platform
+    if (platform === 'linux') {
+      const available = (this.linuxDeepProbePassed || probeLinuxBootstrap())
+        && await probeLinuxManagerAsync(!this.linuxDeepProbePassed, signal)
+      if (available) this.linuxDeepProbePassed = true
+      if (available) return 'linux-scope'
+    }
+    if (platform === 'win32' && probeWindowsJob()) return 'windows-job'
+    this.warnFallback(platform, 'ordinary', platform === 'linux'
+      ? 'the current user-systemd scope or private bootstrap is unavailable'
+      : undefined)
+    return 'fallback'
   }
 
   private selectContainmentMode(
