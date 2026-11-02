@@ -358,6 +358,20 @@ export class BrowserAuth {
   }
 
   /**
+   * Identify an API-format cookie for this authority without granting authentication.
+   * Invalid or expired API cookies still require API validation rather than browser promotion.
+   * @param request - request headers carrying Host and Cookie.
+   * @param secure - whether the receiving listener uses TLS.
+   * @returns whether this authority's cookie declares the API format.
+   */
+  hasApiCookie(request: ConnectionTrustRequest, secure = false): boolean {
+    const authority = requestAudience(request.headers, secure)
+    const cookies = header(request.headers, 'cookie')
+    return authority !== undefined && cookies !== undefined
+      && cookieValue(cookies, cookieName(authority))?.startsWith('v2.') === true
+  }
+
+  /**
    * Verify an API credential without creating or reviving its operator.
    * @param request - request headers carrying Host and Cookie.
    * @param secure - whether the receiving listener uses TLS.

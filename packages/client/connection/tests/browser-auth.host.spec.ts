@@ -130,6 +130,12 @@ describe('API credentials', () => {
     const payload = { version: 2, authority, id, issuedAt, expiresAt: issuedAt + 30 * 86_400_000 }
     expect(JSON.parse(Buffer.from(value.split('.')[1]!, 'base64url').toString('utf8'))).toEqual(payload)
     expect(auth.authenticateApi(request('/', authority, { cookie }))).toBe(id)
+    expect(auth.hasApiCookie(request('/', authority, { cookie }))).toBe(true)
+    expect(auth.hasApiCookie({ headers: new Headers() })).toBe(false)
+    expect(auth.hasApiCookie(request('/', authority))).toBe(false)
+    expect(auth.hasApiCookie(request('/', authority, { cookie: 'other=value' }))).toBe(false)
+    expect(auth.hasApiCookie(request('/', authority, { cookie: exchange(auth).cookie }))).toBe(false)
+    expect(auth.hasApiCookie(request('/', authority, { cookie }), true)).toBe(false)
     expect(auth.isAuthenticated(request('/', authority, { cookie }))).toBe(false)
     expect(auth.authenticateApi(request('/', authority, { cookie: exchange(auth).cookie }))).toBeUndefined()
     expect(auth.isAuthenticated(request('/', authority, { cookie: cookie.replace('=v2.', '=v1.') }))).toBe(false)
@@ -156,6 +162,7 @@ describe('API credentials', () => {
     expect(shorter.authenticateApi(request('/', authority, { cookie }))).toBeUndefined()
     vi.setSystemTime(payload.expiresAt)
     expect(auth.authenticateApi(request('/', authority, { cookie }))).toBeUndefined()
+    expect(auth.hasApiCookie(request('/', authority, { cookie }))).toBe(true)
   })
 })
 

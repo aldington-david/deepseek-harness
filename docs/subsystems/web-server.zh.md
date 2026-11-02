@@ -113,14 +113,14 @@ createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
  * @param request - request headers from the HTTP or upgrade request.
  * @returns rejection status, or undefined when the route may accept the request.
  */
-requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
+requestRejection(request: ConnectionTrustRequest): Promise<ConnectionRequestRejection>
 
 /**
  * Admit an HTTP request against its signed browser or API credential and live Peer.
  * @param request - request headers from the HTTP or upgrade request.
  * @returns the credential's Peer, or the rejection status.
  */
-admit(request: ConnectionTrustRequest): PeerAdmission
+admit(request: ConnectionTrustRequest): Promise<PeerAdmission>
 
 /**
  * Create an independent in-process Peer, disposed with the Context that read `ctx.connection`.
@@ -136,7 +136,7 @@ createPeer(options: { readonly principal: Principal; readonly interactions?: 'an
  * The carrier releases on socket termination or failed upgrade; release removes
  * API admission synchronously without cancelling independent HTTP calls.
  */
-admitConnection(request: ConnectionTrustRequest): ConnectionAdmission
+admitConnection(request: ConnectionTrustRequest): Promise<ConnectionAdmission>
 
 /**
  * Authenticate one frontend index request, owning a token redirect or 401.
@@ -146,7 +146,7 @@ admitConnection(request: ConnectionTrustRequest): ConnectionAdmission
  * @param response - response owned when the result is false.
  * @returns true only when the frontend may serve index.html.
  */
-authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
+authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean>
 
 /**
  * Add the fresh process token to an ordinary Web application URL.
@@ -256,6 +256,25 @@ Source: [`packages/host/webserver/src/index.ts`](../../packages/host/webserver/s
 <a id="connection-events"></a>
 
 ### `connection/*` events
+
+<a id="connectionauthenticate--waterfall"></a>
+
+#### `connection/authenticate` — waterfall
+
+Authenticate a declared external Web origin before native browser sessions. Delegate with next() for origins this authenticator does not own.
+
+```ts cordis-catalog
+/**
+ * Authenticate a declared external Web origin before native browser sessions.
+ * Delegate with next() for origins this authenticator does not own.
+ * @param request - HTTP or WebSocket upgrade request facts.
+ * @param next - Delegate to the next authenticator.
+ * @mode waterfall
+ */
+'connection/authenticate'(request: import('./rpc.ts').ConnectionTrustRequest, next: () => Promise<boolean | undefined>): Promise<boolean | undefined>
+```
+
+Source: [`packages/client/connection/src/index.ts`](../../packages/client/connection/src/index.ts)
 
 <a id="connectionrequest--waterfall"></a>
 

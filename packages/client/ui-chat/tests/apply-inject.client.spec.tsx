@@ -287,6 +287,27 @@ describe('Chat inject API', () => {
     }
   })
 
+  it('uses the trusted host for external message links only while the original frame is embedded', async () => {
+    const b = await bench()
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const openLink = vi.fn(async () => {})
+    let embedded = true
+    Object.assign(b.layout, { webView: { getSnapshot: () => ({ embedded }), openLink } })
+    try {
+      b.sidebarRightTabs.get.mockReturnValue(undefined)
+      const { injected } = b.chatViewApi(b.rootReference)
+      injected.openExternalLink('https://example.test/host')
+      expect(openLink).toHaveBeenCalledWith('https://example.test/host')
+      expect(open).not.toHaveBeenCalled()
+      embedded = false
+      injected.openExternalLink('https://example.test/native')
+      expect(open).toHaveBeenCalledWith('https://example.test/native', '_blank', 'noopener,noreferrer')
+    } finally {
+      open.mockRestore()
+      await b.runtime.dispose()
+    }
+  })
+
   it('applies restored and live link destinations without remounting the Chat view', async () => {
     const settings: ChatSettings = { transcriptView: 'compact', performanceUsage: 'detailed', linkOpening: 'new-tab' }
     const b = await bench(settings)

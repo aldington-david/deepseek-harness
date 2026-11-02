@@ -32,6 +32,20 @@ function bench() {
 }
 
 describe('settings domain base plugin', () => {
+  it('reads Host-backed settings for an authenticated non-loopback browser', async () => {
+    const ctx = new Context()
+    const describeCall = vi.fn().mockResolvedValue({ ok: true, value: { writable: true, hasDocument: true, namespaces: [] } })
+    const remote = new TestRemote(ctx, { settings: { describe: describeCall } })
+    remote.$host = { home: undefined, isLoopback: false }
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    try {
+      await fiber.await()
+      await ctx.configForms.describe().ensure()
+      expect(ctx.configForms.describe().getSnapshot().status).toBe('ready')
+      expect(describeCall).toHaveBeenCalledTimes(1)
+    } finally { await fiber.dispose() }
+  })
+
   it('mounts the scope service under configForms and reads once eagerly', async () => {
     const { ctx, describeCall, fiber } = bench()
     await fiber.await()

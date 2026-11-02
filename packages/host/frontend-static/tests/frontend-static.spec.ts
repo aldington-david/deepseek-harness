@@ -30,11 +30,11 @@ afterEach(async () => {
 })
 
 /** Write a dist fixture and the authenticated Web rows, then boot them through the real Loader. */
-async function loadComposition(): Promise<Context> {
+async function loadComposition(indexName = 'index.html', frameAncestors: string[] = []): Promise<Context> {
   root = await mkdtemp(join(tmpdir(), 'dsh-frontend-static-'))
   const dist = join(root, 'dist')
   await mkdir(dist)
-  const distIndex = join(dist, 'index.html')
+  const distIndex = join(dist, indexName)
   await writeFile(distIndex, '<head></head><body>shell</body>')
   await writeFile(join(dist, 'app.js'), 'export {}')
   await writeFile(join(dist, 'blob.bin'), 'BLOB')
@@ -51,6 +51,8 @@ async function loadComposition(): Promise<Context> {
     "    host: '127.0.0.1'",
     '    port: 0',
     "- name: '@deepseek-ai/dsh-client-connection'",
+    '  config:',
+    `    frameAncestors: ${JSON.stringify(frameAncestors)}`,
     '- id: frontend',
     "  name: '@deepseek-ai/dsh-host-frontend-static'",
     '  config:',
@@ -99,6 +101,20 @@ async function request(
 }
 
 describe('real Loader composition', () => {
+  it('applies the configured embedding policy to every index entry, not public assets', async () => {
+    const loaded = await loadComposition('entry.html', ['https://widget.example'])
+    const base = `http://127.0.0.1:${String(loaded.webServer.port)}`
+    const exchange = await fetch(loaded.connection.authenticatedUrl(base), { redirect: 'manual' })
+    const cookie = exchange.headers.get('set-cookie')?.split(';', 1)[0]
+    if (cookie === undefined) throw new Error('missing fixture cookie')
+    for (const path of ['/', '/entry.html']) {
+      const response = await fetch(base + path, { headers: { cookie } })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'self' https://widget.example")
+    }
+    expect((await fetch(base + '/app.js')).headers.get('content-security-policy')).toBeNull()
+  })
+
   it('serves explicit index entries and files while preserving HTTP error semantics', { timeout: 60_000 }, async () => {
     const loaded = await loadComposition()
     const unloaded = [...loaded.loader.entries()]

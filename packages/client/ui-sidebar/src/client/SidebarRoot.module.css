@@ -624,6 +624,39 @@
   flex-direction: column;
 }
 
+.modeControl { display: block; width: 100%; }
+.modeButton {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.modeButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.modeButton:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+.collapsed .modeButton { justify-content: center; padding-inline: 0; }
+
+:global(html[data-dsh-layout='mobile']) .root { font-size: max(16px, var(--dsh-content-font-size, 16px)); }
+:global(html[data-dsh-layout='mobile']) .root.collapsed { padding: 8px 4px 6px; }
+:global(html[data-dsh-layout='mobile']) .iconButton,
+:global(html[data-dsh-layout='mobile']) .panelRow,
+:global(html[data-dsh-layout='mobile']) .newSession { min-height: 48px; }
+:global(html[data-dsh-layout='mobile']) .collapsed .iconButton,
+:global(html[data-dsh-layout='mobile']) .collapsed .panelRow,
+:global(html[data-dsh-layout='mobile']) .collapsed .newSession { width: 48px; height: 48px; }
+:global(html[data-dsh-layout='mobile']) .settingsArea button { min-width: 48px; min-height: 48px; }
+
 .settingsArea,
 .footerActions {
   flex: none;

@@ -2,7 +2,8 @@
 
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createConnection, createServer, type AddressInfo, type Socket } from 'node:net'
+import { connect, createConnection, createServer, type AddressInfo, type Socket } from 'node:net'
+import { PassThrough } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import type { Message } from '@deepseek-ai/cordis'
 import type { WebRoute, WebServer, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -25,6 +26,11 @@ vi.mock('serve-static', () => ({
     return assets.middleware
   },
 }))
+
+vi.mock('node:net', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:net')>()
+  return { ...actual, connect: vi.fn(actual.connect) }
+})
 
 vi.mock('../src/host/bridge/controller.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/host/bridge/controller.ts')>()
@@ -59,9 +65,10 @@ describe('experimental Inspector Host DevTools routes', () => {
       registerUpgrade: (route) => { upgrades.push(route); return () => {} },
     }
     context.provide('webServer', webServer as WebServer)
-    const auth: Pick<BrowserAuth, 'isAuthenticated' | 'authenticateApi' | 'authorizeIndex'> = {
+    const auth: Pick<BrowserAuth, 'isAuthenticated' | 'authenticateApi' | 'authorizeIndex' | 'hasApiCookie'> = {
       isAuthenticated: () => true,
       authenticateApi: () => undefined,
+      hasApiCookie: () => false,
       authorizeIndex: (_request, response) => {
         if (options.indexAllowed?.() !== false) return true
         response.writeHead(401)
@@ -169,6 +176,36 @@ describe('experimental Inspector Host DevTools routes', () => {
     // Disposal releases every still-proxied socket before the Worker closes.
     await fiber.dispose()
     await Promise.all([selected.closed, unselected.closed])
+  })
+
+  it('does not open a Worker connection when the browser closes during authentication', async () => {
+    const entered = Promise.withResolvers<undefined>()
+    const ready = Promise.withResolvers<boolean>()
+    const { fiber, upgrades } = await mount({ before: (ctx) => {
+      ctx.on('connection/authenticate', () => { entered.resolve(undefined); return ready.promise })
+    } })
+    await fiber.await()
+    const upgrade = upgrades.find(row => row.path === '/inspector/devtools/cdp')
+    if (upgrade === undefined) throw new Error('CDP upgrade route was not registered')
+    vi.mocked(connect).mockClear()
+    const socket = new PassThrough()
+    const closed = new Promise<void>((resolve) => { socket.once('close', resolve) })
+    const pending = upgrade.handler(upgradeRequest(undefined, {}), socket, Buffer.alloc(0))
+    try {
+      await entered.promise
+      socket.destroy()
+      await closed
+      ready.resolve(true)
+      await pending
+      expect(connect).not.toHaveBeenCalled()
+    } finally {
+      ready.resolve(false)
+      await Promise.allSettled([pending])
+      // Release a proxy too if a regression opened it after this test stream had closed.
+      socket.emit('close')
+      socket.destroy()
+      await closed
+    }
   })
 
   it('closes the browser socket when the Worker endpoint refuses the proxied connection', async () => {

@@ -204,6 +204,8 @@ export interface HostConnectionRpc {
 
 /** Host `ctx.connection` members consumed by transport-independent adapters. */
 export interface HostConnectionHandle {
+  /** Additional exact origins explicitly allowed to embed Host-served HTML. */
+  readonly frameAncestors?: readonly string[]
   /** Generic RPC channel registry. */
   readonly rpc: HostConnectionRpc
   /** Exact Fetch routes for streaming or browser-native responses. */
@@ -230,14 +232,14 @@ export interface HostConnectionHandle {
    * @param request - request headers from the HTTP or upgrade request.
    * @returns rejection status, or undefined when the route may accept the request.
    */
-  requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
+  requestRejection(request: ConnectionTrustRequest): Promise<ConnectionRequestRejection>
 
   /**
    * Admit an HTTP request against its signed browser or API credential and live Peer.
    * @param request - request headers from the HTTP or upgrade request.
    * @returns the credential's Peer, or the rejection status.
    */
-  admit(request: ConnectionTrustRequest): PeerAdmission
+  admit(request: ConnectionTrustRequest): Promise<PeerAdmission>
 
   /**
    * Create an independent in-process Peer, disposed with the Context that read `ctx.connection`.
@@ -253,7 +255,7 @@ export interface HostConnectionHandle {
    * The carrier releases on socket termination or failed upgrade; release removes
    * API admission synchronously without cancelling independent HTTP calls.
    */
-  admitConnection(request: ConnectionTrustRequest): ConnectionAdmission
+  admitConnection(request: ConnectionTrustRequest): Promise<ConnectionAdmission>
 
   /**
    * Authenticate one frontend index request, owning a token redirect or 401.
@@ -263,7 +265,7 @@ export interface HostConnectionHandle {
    * @param response - response owned when the result is false.
    * @returns true only when the frontend may serve index.html.
    */
-  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
+  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean>
 
   /**
    * Add the fresh process token to an ordinary Web application URL.

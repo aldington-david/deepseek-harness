@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { BrowserBody, type BrowserBodyProps } from './view/BrowserBody.tsx'
 import { BrowserTitle } from './view/BrowserTitle.tsx'
@@ -89,6 +90,12 @@ export function apply(ctx: Context): void {
         }
         const controller = createBrowserControllers(actions, factory(sessionId), tabId =>
           openTabs.getSnapshot().some(tab => tab.sessionId === sessionId && tab.tabId === tabId))
+        controller.openExternalLink = (url) => {
+          const webView = ctx.get('layout')?.webView
+          if (webView?.getSnapshot().embedded) {
+            void webView.openLink(url).catch(() => { /* The original frame displays host failures. */ })
+          } else window.open(url, '_blank', 'noopener,noreferrer')
+        }
         controllers.set(sessionId, controller)
         return controller
       },

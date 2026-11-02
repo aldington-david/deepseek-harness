@@ -20,6 +20,9 @@ import { LayoutController } from './service.ts'
 import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
 import { en, zh } from './shortcut-locales.ts'
 import { ThemePresenter } from './theme-presenter.ts'
+import { WebViewController } from './web-view.ts'
+import type { ViewMode } from './web-view.ts'
+import { en as webEn, zh as webZh } from './web-view-locales.ts'
 
 // Contract exports only (export-convergence rule: cross-package consumers
 // keep a symbol exported; test-only/package-internal symbols live off /src).
@@ -43,6 +46,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Layout keyboard command labels. */
     'shortcuts.layout': keyof typeof zh
+    /** Original-frame host-operation outcomes. */
+    'layout.web': keyof typeof webEn
   }
 
   interface GlobalStandardProps {
@@ -131,17 +136,21 @@ export interface SidebarOwnerProps {
   collapsed: boolean
   /** Rendered column width in px (SIDEBAR_COLLAPSED when collapsed). */
   width: number
+  /** Current user display choice; omitted by older frame callers. */
+  viewMode?: ViewMode
+  /** Choose phone, desktop or automatic presentation without changing pages. */
+  chooseViewMode?: (mode: ViewMode) => void
 }
 
-/** Right column owner share: resolved normal geometry and opening eligibility. */
+/** Right column owner share: resolved geometry and opening eligibility. */
 export interface RightbarOwnerProps {
-  /** Resolved normal panel width in px, not the saved preference; zero if it cannot fit. */
+  /** Resolved panel width in px; full frame width on phone, zero if desktop columns cannot fit. */
   width: number
   /** Current frame width in px. */
   viewportWidth: number
   /**
-   * Whether a normal right panel can retain 300px beside a 400px center.
-   * Before a narrow opening, includes the space from collapsing the left sidebar.
+   * Whether the panel can open: phone overlays are available at any frame width;
+   * desktop needs 300px beside a 400px center, including space released by sidebar collapse.
    */
   canShow: boolean
 }
@@ -157,6 +166,7 @@ export const inject = ['slots', 'theme', 'locale', 'shortcuts']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register('shortcuts.layout', { zh, en }), 'layout: command labels')
+  ctx.effect(() => ctx.locale.register('layout.web', { zh: webZh, en: webEn }), 'layout: host-operation messages')
   const t = ctx.locale.bind('shortcuts.layout')
 
   ctx.effect(() => {
@@ -171,8 +181,33 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().panelInfo,
       subscribe: listener => instance.subscribe(listener),
     }
+    const webView = new WebViewController(instance, ctx.locale.bind('layout.web'))
+    const presenter = new ThemePresenter()
+    const presentTheme = (): void => {
+      const snapshot = ctx.theme.getTheme()
+      const hostTheme = webView.getSnapshot().theme
+      presenter.apply(snapshot.preference === 'system' && hostTheme !== undefined
+        ? { ...snapshot, active: { ...snapshot.active, colorScheme: hostTheme } } : snapshot)
+    }
+    let presentedTheme = webView.getSnapshot().theme
+    const offPresentationTheme = webView.subscribe(() => {
+      const next = webView.getSnapshot().theme
+      if (next !== presentedTheme) { presentedTheme = next; presentTheme() }
+    })
+    const offTheme = ctx.on('theme/change', presentTheme)
+    presentTheme()
     const layout = new LayoutController(instance.actions, id =>
-      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo)
+      ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo, webView)
+    const restorePanel = webView.onRestore((state) => {
+      const saved = state.layout
+      if (saved === null || typeof saved !== 'object') return
+      const panelId = Reflect.get(saved, 'activePanelId')
+      if (panelId === null) layout.selectPanel(null)
+      else {
+        const entry = ctx.slots.entries('main').find(value => value.options.key === panelId)
+        if (entry?.options.key !== undefined) layout.selectPanel(entry.options.key as import('./service.ts').MainPanelId)
+      }
+    })
     const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo } })
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({
@@ -204,6 +239,11 @@ export function apply(ctx: ClientContext): void {
     retainMainPanels()
     return () => {
       disposeShortcut()
+      offTheme()
+      offPresentationTheme()
+      presenter.dispose()
+      restorePanel()
+      webView.dispose()
       layout.dispose()
       disposePanels()
       disposeRegistration()
@@ -213,15 +253,4 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'ui-layout: service + root registration')
 
-  // Theme presentation: pure DOM writes from resolved snapshots — initial
-  // state through the getter once, then event-driven only; no React path.
-  ctx.effect(() => {
-    const presenter = new ThemePresenter()
-    presenter.apply(ctx.theme.getTheme())
-    const off = ctx.on('theme/change', (snapshot) => { presenter.apply(snapshot) })
-    return () => {
-      off()
-      presenter.dispose()
-    }
-  }, 'ui-layout: theme presenter')
 }

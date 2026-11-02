@@ -18,6 +18,7 @@
     { "path": "../shortcuts/tsconfig.client.json" },
     { "path": "../store" },
     { "path": "../ui-dockkit" },
+    { "path": "../ui-layout" },
     { "path": "../ui-primitives" },
     { "path": "../ui-renderer" },
     { "path": "../ui-session" },

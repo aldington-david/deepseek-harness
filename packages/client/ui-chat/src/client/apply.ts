@@ -265,6 +265,8 @@ export function apply(ctx: Context): void {
           openExternalLink: (url) => {
             if (linkOpening.getSnapshot() === 'sidebar' && ctx.get('sidebarRightTabs')?.get('browser') !== undefined) {
               ctx.sidebarRight.openTab('browser', { params: { url } })
+            } else if (ctx.layout.webView?.getSnapshot().embedded) {
+              void ctx.layout.webView.openLink(url).catch(() => { /* The original frame displays host failures. */ })
             } else {
               window.open(url, '_blank', 'noopener,noreferrer')
             }
