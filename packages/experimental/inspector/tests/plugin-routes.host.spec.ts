@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { connect, createConnection, createServer, type AddressInfo, type Socket } from 'node:net'
 import { PassThrough } from 'node:stream'
+import { setImmediate } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import type { Message } from '@deepseek-ai/cordis'
 import type { WebRoute, WebServer, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -205,6 +206,51 @@ describe('experimental Inspector Host DevTools routes', () => {
       socket.emit('close')
       socket.destroy()
       await closed
+    }
+  })
+
+  it.each(['allowed', 'failed'] as const)('joins %s CDP authentication before closing the Worker on Inspector disposal', async (outcome) => {
+    const entered = Promise.withResolvers<undefined>()
+    const ready = Promise.withResolvers<boolean>()
+    const closeWorker = vi.fn<InspectorHandle['close']>()
+    vi.mocked(startInspector).mockImplementationOnce(async (options) => {
+      const actual = await vi.importActual<typeof import('../src/host/bridge/controller.ts')>('../src/host/bridge/controller.ts')
+      const handle = await actual.startInspector(options)
+      closeWorker.mockImplementation(() => handle.close())
+      return { endpoint: handle.endpoint, source: handle.source, close: closeWorker }
+    })
+    const { fiber, upgrades } = await mount({ before: (ctx) => {
+      ctx.on('connection/authenticate', () => { entered.resolve(undefined); return ready.promise })
+    } })
+    await fiber.await()
+    const upgrade = upgrades.find(row => row.path === '/inspector/devtools/cdp')
+    if (upgrade === undefined) throw new Error('CDP upgrade route was not registered')
+    vi.mocked(connect).mockClear()
+    const pair = await socketPair()
+    const pending = upgrade.handler(upgradeRequest(undefined, {}), pair.server, Buffer.alloc(0))
+    const finished = Promise.allSettled([pending])
+    await entered.promise
+    const disposing = fiber.dispose()
+    try {
+      await vi.waitFor(() => { expect(pair.server.destroyed).toBe(true) })
+      await pair.closed
+      await setImmediate()
+      expect(closeWorker).not.toHaveBeenCalled()
+      const failure = new Error('fixture authentication failed')
+      if (outcome === 'allowed') ready.resolve(true)
+      else ready.reject(failure)
+      expect(await finished).toEqual(outcome === 'allowed'
+        ? [{ status: 'fulfilled', value: undefined }]
+        : [{ status: 'rejected', reason: failure }])
+      await disposing
+      expect(connect).not.toHaveBeenCalled()
+      expect(closeWorker).toHaveBeenCalledOnce()
+    } finally {
+      ready.resolve(false)
+      pair.server.destroy()
+      pair.client.destroy()
+      await Promise.allSettled([finished, disposing])
+      await pair.closed
     }
   })
 

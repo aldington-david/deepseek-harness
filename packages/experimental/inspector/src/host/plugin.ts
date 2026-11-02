@@ -52,6 +52,7 @@ export interface HostPluginConfig extends Omit<InspectorOptions, 'clientOrigins'
  * The bootstrap route exists before the Worker is ready, so a Client published during startup waits instead of failing.
  * When the platform cannot run the Worker (`ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`), the plugin warns once and stays active
  * with only that route, which answers 503; every other startup failure rolls back and rejects the fiber.
+ * Disposal closes relay sockets and joins pending upgrade authentication before closing the Worker.
  */
 export async function apply(ctx: Context, config: HostPluginConfig): Promise<void> {
   await ctx.effect(async () => {
@@ -59,7 +60,11 @@ export async function apply(ctx: Context, config: HostPluginConfig): Promise<voi
     const ready = Promise.withResolvers<InspectorClientBootstrap | undefined>()
     const disposers: Array<() => unknown> = []
     let worker: InspectorHandle | undefined
-    const dispose = () => disposeInspectorResources(disposers, () => worker?.close(), 'experimental-inspector: disposal failed')
+    let disposed = false
+    const dispose = () => {
+      disposed = true
+      return disposeInspectorResources(disposers, () => worker?.close(), 'experimental-inspector: disposal failed')
+    }
     try {
       disposers.push(ctx.connection.fetch.register({
         path: INSPECTOR_BOOTSTRAP_PATH, methods: ['GET'], requestBody: 'buffered',
@@ -115,6 +120,7 @@ export async function apply(ctx: Context, config: HostPluginConfig): Promise<voi
         },
       }))
       const sockets = new Set<Duplex>()
+      const pendingUpgrades = new Set<Promise<void>>()
       const track = (socket: Duplex): void => {
         sockets.add(socket)
         socket.once('close', () => { sockets.delete(socket) })
@@ -124,45 +130,57 @@ export async function apply(ctx: Context, config: HostPluginConfig): Promise<voi
           socket.once('close', resolve)
           socket.destroy()
         })))
+        await Promise.all(pendingUpgrades)
       })
       const target = new URL(handle.endpoint.webSocketDebuggerUrl)
       disposers.push(ctx.webServer.registerUpgrade({
         path: `${DEVTOOLS_PATH}/cdp`,
         handler: async (req, socket, head) => {
-          const rejection = await ctx.connection.requestRejection(req)
-          if (rejection !== undefined) {
-            const reason = rejection === 401 ? 'Unauthorized' : 'Forbidden'
-            socket.end(`HTTP/1.1 ${rejection} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+          if (disposed || socket.destroyed) {
+            socket.destroy()
             return
           }
-          if (socket.destroyed) return
-          const endpoint = new URL(target)
-          try {
-            const selected = readInspectorClientSelection(new URL(req.url ?? '/', 'http://inspector.invalid'))
-            if (selected !== undefined) endpoint.searchParams.set(INSPECTOR_CLIENT_QUERY, selected)
-          } catch (error) {
-            void error // Invalid selectors must not open an unfiltered connection.
-            socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
-            return
-          }
-          const upstream = connect(Number(target.port), target.hostname)
+          const settled = Promise.withResolvers<void>()
+          pendingUpgrades.add(settled.promise)
           track(socket)
-          track(upstream)
-          upstream.once('connect', () => {
-            upstream.write(`GET ${endpoint.pathname}${endpoint.search} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n`)
-            for (const [key, value] of Object.entries(req.headers)) {
-              if (key.startsWith('sec-websocket-') && value !== undefined) {
-                upstream.write(`${key}: ${Array.isArray(value) ? value.join(', ') : value}\r\n`)
-              }
+          try {
+            const rejection = await ctx.connection.requestRejection(req)
+            if (disposed || socket.destroyed) return
+            if (rejection !== undefined) {
+              const reason = rejection === 401 ? 'Unauthorized' : 'Forbidden'
+              socket.end(`HTTP/1.1 ${rejection} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+              return
             }
-            upstream.write('\r\n')
-            if (head.length > 0) upstream.write(head)
-            socket.pipe(upstream).pipe(socket)
-          })
-          upstream.once('error', () => { socket.destroy() })
-          socket.once('error', () => { upstream.destroy() })
-          upstream.once('close', () => { socket.destroy() })
-          socket.once('close', () => { upstream.destroy() })
+            const endpoint = new URL(target)
+            try {
+              const selected = readInspectorClientSelection(new URL(req.url ?? '/', 'http://inspector.invalid'))
+              if (selected !== undefined) endpoint.searchParams.set(INSPECTOR_CLIENT_QUERY, selected)
+            } catch (error) {
+              void error // Invalid selectors must not open an unfiltered connection.
+              socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+              return
+            }
+            const upstream = connect(Number(target.port), target.hostname)
+            track(upstream)
+            upstream.once('connect', () => {
+              upstream.write(`GET ${endpoint.pathname}${endpoint.search} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n`)
+              for (const [key, value] of Object.entries(req.headers)) {
+                if (key.startsWith('sec-websocket-') && value !== undefined) {
+                  upstream.write(`${key}: ${Array.isArray(value) ? value.join(', ') : value}\r\n`)
+                }
+              }
+              upstream.write('\r\n')
+              if (head.length > 0) upstream.write(head)
+              socket.pipe(upstream).pipe(socket)
+            })
+            upstream.once('error', () => { socket.destroy() })
+            socket.once('error', () => { upstream.destroy() })
+            upstream.once('close', () => { socket.destroy() })
+            socket.once('close', () => { upstream.destroy() })
+          } finally {
+            pendingUpgrades.delete(settled.promise)
+            settled.resolve()
+          }
         },
       }))
       // This readiness URL is emitted while the plugin tree is still loading, before a logger sink is guaranteed.
