@@ -407,13 +407,17 @@ describe('Linux scope establishment and quiescence', () => {
     expect(query).toHaveBeenCalledOnce()
     expect(query.mock.calls[0]?.[0]).toBe('/custom/systemd-run')
     expect(query.mock.calls[0]?.[1]).toContain('/custom/systemctl')
-    await expect(confirmLinuxManagerAsync(signal, { systemctlQuery: query, unixSocketTable: '/missing-socket-table' })).resolves.toBe(false)
+    await expect(confirmLinuxManagerAsync(signal, {
+      systemctlQuery: query, systemctl: '/custom/systemctl', unixSocketTable: '/missing-socket-table',
+    })).resolves.toBe(false)
+    expect(query.mock.calls[1]?.[0]).toBe('/custom/systemctl')
     query.mockReset().mockResolvedValueOnce({ status: 1, stdout: '', stderr: 'unrecognized option --expand-environment=no' }).mockResolvedValueOnce(reply)
     await expect(probeLinuxScopeAsync(signal, { systemctlQuery: query })).resolves.toBeUndefined()
     expect(query).toHaveBeenCalledTimes(2)
   })
 
   it('preserves pre-254 literal argv detection in awaited native allocation', async () => {
+    await expect(probeLinuxNativeAsync(AbortSignal.abort(new Error('cancelled probe')))).rejects.toThrow('cancelled probe')
     const query = vi.fn()
       .mockResolvedValueOnce({ status: 1, stdout: '', stderr: "unrecognized option '--expand-environment=no'" })
       .mockResolvedValueOnce({ status: 0, stdout: 'active', stderr: '' })
