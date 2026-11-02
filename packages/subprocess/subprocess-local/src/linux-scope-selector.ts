@@ -6,10 +6,14 @@ import type { LiteralArgvOptions } from './linux-scope.ts'
 export interface LinuxScopeObservations {
   /** Run the deep transient-scope probe: literal-argv options when a scope can start, otherwise undefined. */
   probe(): LiteralArgvOptions | undefined
+  /** Run the same deep probe without blocking; cancellation joins its manager process. */
+  probeAsync(signal: AbortSignal): Promise<LiteralArgvOptions | undefined>
   /** Identify the process listening on the user manager's private socket, or undefined when none listens. */
   managerListener(): string | undefined
   /** Confirm the user manager before a launch under a positive verdict. */
   confirmManager(): boolean
+  /** Confirm the manager without blocking and honor allocation cancellation. */
+  confirmManagerAsync(signal: AbortSignal): Promise<boolean>
   /** Identify the systemd-run binary scope launches resolve, or undefined when none resolves. */
   launcherIdentity(): string | undefined
 }
@@ -47,8 +51,8 @@ type LinuxScopeState =
  * Provider-lifetime Linux scope selection. A probe runs on the first selection and again only after
  * a scope launch never started its target, a different user-manager listener appears under a
  * negative verdict, or the systemd-run binary changes under a positive one. A positive verdict
- * confirms the user manager on every selection. Selection is synchronous, so a decision stays
- * valid for the launch that follows it.
+ * confirms the user manager on every selection. Awaited selection shares this state and never
+ * publishes a cancelled or superseded probe result.
  */
 export class LinuxScopeSelector {
   private state: LinuxScopeState = { kind: 'unprobed', trigger: 'first' }
@@ -77,6 +81,42 @@ export class LinuxScopeSelector {
   }
 
   /**
+   * Choose containment without blocking on manager commands.
+   * @param signal - caller and provider allocation cancellation.
+   * @returns the current decision after all owned manager commands exit.
+   */
+  async selectAsync(signal: AbortSignal): Promise<LinuxScopeDecision> {
+    for (;;) {
+      signal.throwIfAborted()
+      const state = this.state
+      let trigger: LinuxProbeTrigger
+      if (state.kind === 'unprobed') trigger = state.trigger
+      else if (state.kind === 'available') {
+        if (this.observe.launcherIdentity() !== state.launcher) trigger = 'launcher-changed'
+        else {
+          const confirmed = await this.observe.confirmManagerAsync(signal)
+          signal.throwIfAborted()
+          if (state !== this.state) continue
+          return confirmed
+            ? { kind: 'scope', reason: 'manager-confirmed', literalArgv: state.literalArgv, generation: this.generation, probe: undefined }
+            : { kind: 'fallback', reason: 'manager-unconfirmed', probe: undefined }
+        }
+      } else {
+        const listener = this.observe.managerListener()
+        if (listener === undefined) return { kind: 'fallback', reason: 'no-listener', probe: undefined }
+        if (listener === state.listener) return { kind: 'fallback', reason: 'same-listener', probe: undefined }
+        trigger = 'new-listener'
+      }
+      const listener = this.observe.managerListener()
+      const launcher = this.observe.launcherIdentity()
+      const literalArgv = await this.observe.probeAsync(signal)
+      signal.throwIfAborted()
+      if (state !== this.state) continue
+      return this.recordProbe(trigger, listener, launcher, literalArgv)
+    }
+  }
+
+  /**
    * Record that a scope launched under generation exited before its bootstrap started the target,
    * so the next selection probes again. Launches from a superseded probe are ignored.
    * @param generation - generation of the scope decision that launched it.
@@ -86,11 +126,20 @@ export class LinuxScopeSelector {
   }
 
   private probe(trigger: LinuxProbeTrigger): LinuxScopeDecision {
-    this.generation += 1
     // Read before probing: a manager that starts during a failed probe then counts as a new listener.
     const listener = this.observe.managerListener()
     const launcher = this.observe.launcherIdentity()
     const literalArgv = this.observe.probe()
+    return this.recordProbe(trigger, listener, launcher, literalArgv)
+  }
+
+  private recordProbe(
+    trigger: LinuxProbeTrigger,
+    listener: string | undefined,
+    launcher: string | undefined,
+    literalArgv: LiteralArgvOptions | undefined,
+  ): LinuxScopeDecision {
+    this.generation += 1
     if (literalArgv === undefined) {
       this.state = { kind: 'unavailable', listener }
       return { kind: 'fallback', reason: 'probe-unavailable', probe: trigger }

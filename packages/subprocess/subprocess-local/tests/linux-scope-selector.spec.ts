@@ -44,25 +44,28 @@ function summary(decision: LinuxScopeDecision): string {
     : `fallback ${decision.reason}${probe}`
 }
 
-function run(initial: World, steps: readonly Step[]): { decisions: string[]; probes: number } {
+async function run(initial: World, steps: readonly Step[], awaited: boolean): Promise<{ decisions: string[]; probes: number }> {
   const world = { ...initial }
   let duringProbe: Partial<World> | undefined
   let probes = 0
+  const probe = () => {
+    probes += 1
+    const result = world.probe
+    Object.assign(world, duringProbe)
+    duringProbe = undefined
+    return result
+  }
   const selector = new LinuxScopeSelector({
-    probe: () => {
-      probes += 1
-      const result = world.probe
-      Object.assign(world, duringProbe)
-      duringProbe = undefined
-      return result
-    },
+    probe,
+    probeAsync: () => Promise.resolve(probe()),
     managerListener: () => world.listener,
     confirmManager: () => world.confirm,
+    confirmManagerAsync: () => Promise.resolve(world.confirm),
     launcherIdentity: () => world.launcher,
   })
   const decisions: string[] = []
   for (const step of steps) {
-    if (step === 'launch') decisions.push(summary(selector.select()))
+    if (step === 'launch') decisions.push(summary(awaited ? await selector.selectAsync(new AbortController().signal) : selector.select()))
     else if ('set' in step) Object.assign(world, step.set)
     else if ('duringProbe' in step) duringProbe = step.duringProbe
     else selector.scopeNotStarted(step.notStarted)
@@ -210,16 +213,20 @@ const scenarios: readonly Scenario[] = [
   },
 ]
 
-describe('Linux scope selection', () => {
-  it.each(scenarios)('$name', ({ world, steps, decisions, probes }) => {
-    expect(run(world, steps)).toEqual({ decisions, probes })
+describe.each([false, true])('Linux scope selection (awaited=%s)', (awaited) => {
+  it.each(scenarios)('$name', async ({ world, steps, decisions, probes }) => {
+    expect(await run(world, steps, awaited)).toEqual({ decisions, probes })
   })
+})
 
+describe('Linux scope observations', () => {
   it('consults only the observations each verdict needs', () => {
     const observe = {
       probe: vi.fn((): readonly string[] | undefined => undefined),
+      probeAsync: vi.fn(() => Promise.resolve(undefined)),
       managerListener: vi.fn((): string | undefined => undefined),
       confirmManager: vi.fn(() => true),
+      confirmManagerAsync: vi.fn(() => Promise.resolve(true)),
       launcherIdentity: vi.fn((): string | undefined => 'systemd-run'),
     }
     const selector = new LinuxScopeSelector(observe)
@@ -237,5 +244,49 @@ describe('Linux scope selection', () => {
     selector.select()
     expect(observe.managerListener).not.toHaveBeenCalled()
     expect(observe.confirmManager).toHaveBeenCalledOnce()
+  })
+
+  it('does not replace a synchronous selection with an older awaited probe', async () => {
+    const pending = Promise.withResolvers<readonly string[] | undefined>()
+    const selector = new LinuxScopeSelector({
+      probe: () => [], probeAsync: () => pending.promise,
+      managerListener: () => 'manager', launcherIdentity: () => 'launcher',
+      confirmManager: () => true, confirmManagerAsync: () => Promise.resolve(true),
+    })
+    const awaiting = selector.selectAsync(new AbortController().signal)
+    expect(selector.select()).toMatchObject({ kind: 'scope', literalArgv: [], generation: 1 })
+    pending.resolve([OPTION])
+    expect(await awaiting).toMatchObject({ kind: 'scope', literalArgv: [], generation: 1, reason: 'manager-confirmed' })
+  })
+
+  it('does not cache a cancelled probe or invalidate another allocation', async () => {
+    const pending = Promise.withResolvers<readonly string[] | undefined>()
+    const probeAsync = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce([])
+    const selector = new LinuxScopeSelector({
+      probe: () => [], probeAsync,
+      managerListener: () => 'manager', launcherIdentity: () => 'launcher',
+      confirmManager: () => true, confirmManagerAsync: () => Promise.resolve(true),
+    })
+    const controller = new AbortController()
+    const rejected = expect(selector.selectAsync(controller.signal)).rejects.toThrow('cancelled')
+    controller.abort(new Error('cancelled'))
+    pending.resolve([OPTION])
+    await rejected
+    expect(await selector.selectAsync(new AbortController().signal)).toMatchObject({ kind: 'scope', literalArgv: [], generation: 1 })
+    expect(probeAsync).toHaveBeenCalledTimes(2)
+  })
+
+  it('reselects when a scope failure invalidates an awaited manager confirmation', async () => {
+    const confirmation = Promise.withResolvers<boolean>()
+    const selector = new LinuxScopeSelector({
+      probe: () => [], probeAsync: () => Promise.resolve([OPTION]),
+      managerListener: () => 'manager', launcherIdentity: () => 'launcher',
+      confirmManager: () => true, confirmManagerAsync: () => confirmation.promise,
+    })
+    selector.select()
+    const awaiting = selector.selectAsync(new AbortController().signal)
+    selector.scopeNotStarted(1)
+    confirmation.resolve(true)
+    expect(await awaiting).toMatchObject({ kind: 'scope', literalArgv: [OPTION], generation: 2, probe: 'scope-not-started' })
   })
 })

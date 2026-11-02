@@ -33,7 +33,7 @@ import { childEnv } from './spawn.ts'
 export interface LinuxScopeInternals {
   spawn?: typeof spawn
   spawnSync?: typeof spawnSync
-  systemctlQuery?: (command: string, args: readonly string[]) => Promise<SystemctlResult>
+  systemctlQuery?: (command: string, args: readonly string[], signal?: AbortSignal) => Promise<SystemctlResult>
   systemdRun?: string
   systemctl?: string
   runnerInvocation?: RunnerInvocation
@@ -76,21 +76,24 @@ function quietSystemdEnvironment(): NodeJS.ProcessEnv {
   return childEnv({ LC_ALL: 'C', SYSTEMD_LOG_TARGET: 'null' })
 }
 
-function querySystemctl(command: string, args: readonly string[]): Promise<SystemctlResult> {
+function querySystemctl(command: string, args: readonly string[], signal?: AbortSignal): Promise<SystemctlResult> {
   return new Promise((resolveResult) => {
-    execFile(command, [...args], {
+    let result: SystemctlResult
+    const child = execFile(command, [...args], {
       encoding: 'utf8',
       env: managerEnvironment(),
       timeout: SYSTEMCTL_TIMEOUT_MS,
+      signal,
     }, (error, stdout, stderr) => {
       const code = error === null ? 0 : (error as Error & { code?: string | number }).code
-      resolveResult({
+      result = {
         status: typeof code === 'number' ? code : null,
         stdout,
         stderr,
         ...error === null ? {} : { error },
-      })
+      }
     })
+    child.once('close', () => { resolveResult(result) })
   })
 }
 
@@ -250,6 +253,63 @@ export function confirmLinuxManager(internals: LinuxScopeInternals = {}): boolea
   return linuxManagerListener(internals) !== undefined || probeLinuxManager(internals)
 }
 
+/**
+ * Check literal-argv transient-scope support without blocking the Host.
+ * @param signal - caller and provider allocation cancellation.
+ * @param internals - optional systemd command seams used by tests.
+ * @returns literal-argv options, or undefined when the user manager cannot create the scope.
+ */
+export async function probeLinuxScopeAsync(
+  signal: AbortSignal,
+  internals: LinuxScopeInternals = {},
+): Promise<LiteralArgvOptions | undefined> {
+  signal.throwIfAborted()
+  const attempt = async (literalArgv: LiteralArgvOptions): Promise<SystemctlResult> => {
+    const unit = unitStem('dsh-subprocess-probe')
+    const result = await (internals.systemctlQuery ?? querySystemctl)(internals.systemdRun ?? 'systemd-run', [
+      '--user', '--scope', '--quiet', '--collect', ...literalArgv, `--unit=${unit}`, '--',
+      internals.systemctl ?? 'systemctl', '--user', 'show', `${unit}.scope`, '--property=ActiveState', '--value',
+    ], signal)
+    signal.throwIfAborted()
+    return result
+  }
+  const current = await attempt([LITERAL_ARGV_OPTION])
+  if (current.error === undefined && current.status === 0) return [LITERAL_ARGV_OPTION]
+  if (!LITERAL_ARGV_OPTION_REJECTED.test(current.stderr)) return undefined
+  const legacy = await attempt([])
+  return legacy.error === undefined && legacy.status === 0 ? [] : undefined
+}
+
+/**
+ * Check native bindings and await the literal-argv scope probe.
+ * @param signal - caller and provider allocation cancellation.
+ * @param internals - optional native and systemd seams used by tests.
+ * @returns literal-argv options when native containment is available.
+ */
+export async function probeLinuxNativeAsync(
+  signal: AbortSignal,
+  internals: LinuxScopeInternals = {},
+): Promise<LiteralArgvOptions | undefined> {
+  signal.throwIfAborted()
+  return probeLinuxBootstrap(internals) ? await probeLinuxScopeAsync(signal, internals) : undefined
+}
+
+/**
+ * Confirm the manager through its listener or an awaited systemctl query.
+ * @param signal - caller and provider allocation cancellation.
+ * @param internals - optional socket-table and systemctl seams used by tests.
+ * @returns whether the user manager can receive a scope launch.
+ */
+export async function confirmLinuxManagerAsync(signal: AbortSignal, internals: LinuxScopeInternals = {}): Promise<boolean> {
+  signal.throwIfAborted()
+  if (linuxManagerListener(internals) !== undefined) return true
+  const result = await (internals.systemctlQuery ?? querySystemctl)(
+    internals.systemctl ?? 'systemctl', ['--user', 'show', '--property=Version', '--value'], signal,
+  )
+  signal.throwIfAborted()
+  return result.error === undefined && result.status === 0
+}
+
 interface DirectRange {
   running(): boolean
   /** True for group TERM delivery, direct signal submission, or proven direct-PID absence. */
@@ -290,6 +350,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
   private directKillSettlement: Promise<void> | undefined
   private wakeGeneration = 0
   private wakeWaiter: { generation: number; resolve: () => void } | undefined
+  private readonly signalling = new Set<Promise<void>>()
 
   constructor(
     private readonly unit: string,
@@ -318,13 +379,22 @@ class SystemdScopeOwner implements BoundProcessOwner {
     const directFallbackRequired = this.establishment === 'pending'
     let directSignalled = false
     if (directFallbackRequired && this.direct.running()) directSignalled = this.direct.signal(signal)
-    const result = this.runSync(this.systemctl, [
+    this.wakeObservation()
+    const pending = this.sendSignal(signal, directFallbackRequired, directSignalled)
+    this.signalling.add(pending)
+    void pending.finally(() => { this.signalling.delete(pending) }).catch(() => {})
+  }
+
+  private async sendSignal(signal: 'SIGTERM' | 'SIGKILL', directFallbackRequired: boolean, directSignalled: boolean): Promise<void> {
+    const result = await this.query(this.systemctl, [
       '--user',
       'kill',
       KILL_ALL_MEMBERS,
       `--signal=${signal}`,
       this.unit,
-    ], { encoding: 'utf8', env: managerEnvironment(), timeout: SYSTEMCTL_TIMEOUT_MS })
+    ]).catch((cause: unknown): SystemctlResult => ({
+      status: null, stdout: '', stderr: '', error: cause instanceof Error ? cause : new Error(String(cause)),
+    }))
     this.wakeObservation()
     if (result.error === undefined && result.status === 0) {
       if (signal === 'SIGKILL') {
@@ -396,13 +466,9 @@ class SystemdScopeOwner implements BoundProcessOwner {
   }
 
   /** Release a leftover empty scope so the transient unit is collected and cannot accumulate. */
-  private releaseEmptyRange(): void {
+  private async releaseEmptyRange(): Promise<void> {
     try {
-      this.runSync(this.systemctl, ['--user', 'stop', this.unit], {
-        env: managerEnvironment(),
-        stdio: 'ignore',
-        timeout: SYSTEMCTL_TIMEOUT_MS,
-      })
+      await this.query(this.systemctl, ['--user', 'stop', this.unit])
     } catch {
       // The range is already empty; a failed cleanup leaves only the transient unit.
     }
@@ -442,6 +508,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
   }
 
   private async rangeActive(): Promise<boolean> {
+    while (this.signalling.size > 0) await Promise.all(this.signalling)
     this.observeRequestConsumption()
     const generation = this.wakeGeneration
     const directRunning = this.direct.running()
@@ -470,7 +537,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
         throw new Error(`systemctl returned unknown ActiveState for ${this.unit}: ${JSON.stringify(activeState)}`)
       }
       if (this.emptyRange(tasksCurrent)) {
-        this.releaseEmptyRange()
+        await this.releaseEmptyRange()
         return false
       }
       if (this.killFailure !== undefined) {

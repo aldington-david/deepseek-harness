@@ -38,6 +38,8 @@ kind: "package-reference"
 
 ### 启动受管进程
 
+分配进程需要等待提供方前置检查时，使用 `await ctx.subprocess.spawnAsync(spec)`。它返回与 `spawn(spec)` 相同的句柄；校验失败或分配前取消会 reject，不启动目标。基类实现调用 `spawn`；提供方说明自己的 awaited 路径是否将前置检查移出调用方事件循环。原有同步调用方仍可使用 `spawn`。
+
 请求完全明确：程序与参数、工作目录、每条流一种 stdio 处置方式、终止宽限期、可选的中止信号与可选的环境覆盖。目标与受管范围标识保留在提供方内部。`done` 以直接命令的退出事实（`exitCode` 与 `signal`）resolve，并在 spawn 或提供方失败时 reject；收集输出在退出后仍可读取。
 
 ```text

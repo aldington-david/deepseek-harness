@@ -36,6 +36,10 @@ kind: "package-reference"
 - name: '@deepseek-ai/dsh-bash-local'
 ```
 
+### 等待进程分配
+
+`spawnAsync(spec)` 等待 Linux manager 检查时不阻塞 Host 事件循环，与 `spawn` 共用已缓存的判定和失效规则，包括 systemd 254 之前的字面 argv 支持。每次分配保留自己的 scope 判定；取消或已被取代的探测不能覆盖共享判定。本地原生绑定检查仍为同步；目标启动沿用 scope bootstrap 或 Windows Job runner。调用方取消或提供方开始销毁后不会启动目标，销毁会等待正在进行的分配收尾，再释放进程归属。Linux 正常终止和空 scope 释放采用异步 manager 命令；宿主退出时的最终清理仍为同步。
+
 ### 解析可执行文件
 
 绝对可执行文件路径会被验证；裸名称根据清理后的 PATH 并以平台感知的可执行文件扩展名（Windows 上为 `.COM`/`.EXE`/`.BAT`/`.CMD`）解析。含分隔符的相对路径会被拒绝——请提供绝对路径或裸 PATH 名称——相对 PATH 条目从宿主进程 cwd 解析。

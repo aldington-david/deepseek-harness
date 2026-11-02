@@ -35,11 +35,13 @@ import { logSpillFailure, prepareManagedProcessBinding } from './output.ts'
 import type { LocalSubprocessHandle, SpawnInternals } from './spawn.ts'
 import {
   confirmLinuxManager,
+  confirmLinuxManagerAsync,
   LinuxScopeNotStartedError,
   launchLinuxScope,
   linuxManagerListener,
   prepareLinuxTerminalScope,
   probeLinuxNative,
+  probeLinuxNativeAsync,
   signalLinuxDirectProcess,
   systemdRunIdentity,
 } from './linux-scope.ts'
@@ -53,6 +55,7 @@ import { LocalTerminalHandle } from './terminal.ts'
 import { prepareShellActivity } from './shell-activity.ts'
 
 const requireNodePty = createLazyRequire<typeof NodePty>('node-pty', import.meta.url)
+type ContainmentMode = 'windows-job' | 'fallback' | Extract<LinuxScopeDecision, { kind: 'scope' }>
 
 /**
  * Local subprocess service: platform-selected managed ranges, Node-shaped stdio
@@ -72,18 +75,18 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   internals: SpawnInternals = {}
   /** Provider-lifetime latch suppressing repeated weaker-containment warnings. */
   private fallbackWarningIssued = false
-  /**
-   * Linux native containment decisions. Each probe is a spawnSync that blocks the event loop and forks the
-   * host, so the selector reruns it only after an event invalidates the previous verdict.
-   */
+  /** Shared invalidation state for synchronous and awaited Linux containment selection. */
   private readonly linuxScope = new LinuxScopeSelector({
     probe: () => probeLinuxNative(),
+    probeAsync: signal => probeLinuxNativeAsync(signal),
     managerListener: () => linuxManagerListener(),
     confirmManager: () => confirmLinuxManager(),
+    confirmManagerAsync: signal => confirmLinuxManagerAsync(signal),
     launcherIdentity: () => systemdRunIdentity(),
   })
-  /** Scope decision of the launch in progress; selectContainmentMode sets it immediately before the launch reads it. */
-  private linuxScopeDecision: Extract<LinuxScopeDecision, { kind: 'scope' }> | undefined
+  /** Pending allocation is owned before a target handle exists. */
+  private readonly allocationLifetime = new AbortController()
+  private readonly allocations = new Set<Promise<SubprocessHandle>>()
   /** Test hook for platform process inspection; production resolves lazily on terminal spawn. */
   terminalInspector: ProcessInspector | undefined
 
@@ -103,6 +106,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   private readonly reportSpillFailure = logSpillFailure(this.ctx.logger, 'subprocess-local')
 
   private terminateForHostExit(): void {
+    this.allocationLifetime.abort(new Error('subprocess provider is stopping'))
     for (const handle of this.live) {
       try {
         handle.terminateForHostExit()
@@ -120,6 +124,8 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   }
 
   private async disposeManagedProcesses(): Promise<void> {
+    this.allocationLifetime.abort(new Error('subprocess provider is stopping'))
+    await Promise.allSettled(this.allocations)
     // Request termination, then await MANAGED-RANGE exit — not just the
     // direct command's settlement — so even a surviving descendant cannot
     // outlive the fiber. Keep both sets authoritative while these waits are
@@ -198,13 +204,37 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
     validateSubprocessSpec(spec)
     const env = targetEnvironment(spec)
     const containmentMode = this.selectContainmentMode('ordinary')
+    return this.spawnManaged(spec, env, containmentMode)
+  }
+
+  /** @inheritdoc */
+  override async spawnAsync(spec: SubprocessSpawnSpec): Promise<SubprocessHandle> {
+    const allocate = async (): Promise<SubprocessHandle> => {
+      validateSubprocessSpec(spec)
+      const env = targetEnvironment(spec)
+      const signal = AbortSignal.any([this.allocationLifetime.signal, ...spec.signal === undefined ? [] : [spec.signal]])
+      signal.throwIfAborted()
+      const containmentMode = await this.selectContainmentModeAsync(signal)
+      signal.throwIfAborted()
+      return this.spawnManaged(spec, env, containmentMode)
+    }
+    const pending = allocate()
+    this.allocations.add(pending)
+    try { return await pending } finally { this.allocations.delete(pending) }
+  }
+
+  private spawnManaged(
+    spec: SubprocessSpawnSpec,
+    env: Record<string, string>,
+    containmentMode: ContainmentMode,
+  ): SubprocessHandle {
     let handle: LocalSubprocessHandle
     const internals: SpawnInternals = { ...this.internals, onSpillFailure: this.reportSpillFailure }
     if (containmentMode === 'fallback') {
       handle = spawnSubprocess(spec, internals)
     } else {
       const binding = prepareManagedProcessBinding(internals)
-      const linuxScope = containmentMode === 'linux-scope' ? this.linuxScopeDecision : undefined
+      const linuxScope = typeof containmentMode === 'string' ? undefined : containmentMode
       const launch = linuxScope === undefined
         ? launchWindowsJob(spec, env)
         : launchLinuxScope(spec, env, linuxScope.literalArgv)
@@ -234,19 +264,31 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
     })
   }
 
+  private async selectContainmentModeAsync(signal: AbortSignal): Promise<ContainmentMode> {
+    const platform = this.internals.platform ?? process.platform
+    if (platform === 'linux') {
+      const decision = await this.linuxScope.selectAsync(signal)
+      const probe = decision.probe === undefined ? '' : `, probed after ${decision.probe}`
+      this.ctx.logger.debug(`linux native containment: ${decision.kind} (${decision.reason}${probe})`)
+      if (decision.kind === 'scope') return decision
+    }
+    if (platform === 'win32' && probeWindowsJob()) return 'windows-job'
+    this.warnFallback(platform, 'ordinary', platform === 'linux'
+      ? 'the current user-systemd scope or private bootstrap is unavailable'
+      : undefined)
+    return 'fallback'
+  }
+
   private selectContainmentMode(
     kind: 'ordinary' | 'terminal',
-  ): 'linux-scope' | 'windows-job' | 'fallback' {
+  ): ContainmentMode {
     const platform = this.internals.platform ?? process.platform
     let fallbackReason: string | undefined
     if (platform === 'linux') {
       const decision = this.linuxScope.select()
       const probe = decision.probe === undefined ? '' : `, probed after ${decision.probe}`
       this.ctx.logger.debug(`linux native containment: ${decision.kind} (${decision.reason}${probe})`)
-      if (decision.kind === 'scope') {
-        this.linuxScopeDecision = decision
-        return 'linux-scope'
-      }
+      if (decision.kind === 'scope') return decision
       fallbackReason = 'the current user-systemd scope or private bootstrap is unavailable'
     }
     if (kind === 'ordinary' && platform === 'win32') {
@@ -311,7 +353,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
       // verbatim, see [Agent Note](../../../../.agents/notes/implemented/bug-fix/2026-09-28-pty-bundled-console-host.md).
       ...(platform === 'win32' ? { useConptyDll: true } : {}),
     }
-    const linuxScope = containmentMode === 'linux-scope' ? this.linuxScopeDecision : undefined
+    const linuxScope = typeof containmentMode === 'string' ? undefined : containmentMode
     let scope: ReturnType<typeof prepareLinuxTerminalScope> | undefined
     let terminal: NodePty.IPty
     try {

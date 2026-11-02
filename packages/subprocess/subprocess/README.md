@@ -38,6 +38,8 @@ One provider registers `ctx.subprocess` per composition; load it beside the cons
 
 ### Starting a managed process
 
+Use `await ctx.subprocess.spawnAsync(spec)` when allocation can wait for provider prerequisites. It returns the same handle as `spawn(spec)` and rejects validation or pre-allocation cancellation without starting the target. The base implementation delegates to `spawn`; providers document whether their awaited path keeps prerequisite checks off the calling event loop. Existing synchronous callers can continue using `spawn`.
+
 The request is fully explicit: the program and arguments, the working directory, one stdio disposition per stream, a termination grace, an optional abort signal, and optional environment overrides. Target and managed-range identities remain provider-private. `done` resolves with the direct command's exit facts (`exitCode` and `signal`) and rejects for spawn or provider failures; collected output stays readable after exit.
 
 ```text
