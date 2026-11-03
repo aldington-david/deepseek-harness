@@ -308,6 +308,15 @@ abstract terminalEnvironment(signal?: AbortSignal): Promise<SubprocessTerminalEn
 abstract spawn(spec: SubprocessSpawnSpec): SubprocessHandle
 
 /**
+ * Allocate one ordinary process through the provider's awaited launch path.
+ * The default delegates to synchronous spawn; providers with asynchronous
+ * prerequisites override it. Cancellation before allocation starts no target.
+ * @param spec - the same explicit process request accepted by spawn.
+ * @returns the owned handle after allocation; validation failures reject.
+ */
+async spawnAsync(spec: SubprocessSpawnSpec): Promise<SubprocessHandle>
+
+/**
  * Allocate a real terminal and start one owned process session. This is the
  * only non-pipe process primitive: implementations own terminal byte I/O,
  * foreground groups, signals, and whole-session quiescence.

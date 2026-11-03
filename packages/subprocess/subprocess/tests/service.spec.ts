@@ -69,6 +69,11 @@ describe('SubprocessRuntime seam', () => {
     await expect(handle.waitForExit()).resolves.toBe(true)
     const outcome = await handle.done
     expect(outcome.exitCode).toBe(0)
+    const awaited = await ctx.subprocess.spawnAsync({
+      argv: ['true'], cwd: '/stub', graceMs: 1,
+      stdio: { stdin: 'ignore', stdout: 'inherit', stderr: 'inherit' },
+    })
+    await expect(awaited.done).resolves.toEqual({ exitCode: 0, signal: null })
   })
 
   it('loading a second implementation throws (one subprocess service per context — cordis standard)', async () => {

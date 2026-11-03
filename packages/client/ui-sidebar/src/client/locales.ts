@@ -9,6 +9,7 @@ export const zh = {
   'panels.label': '全局面板',
   'panels.home': '打开主面板',
   'assistant.label': '研究助手',
+  'panels.more': '更多',
 } satisfies Record<string, string>
 
 /** The sidebar namespace key union. */
@@ -23,4 +24,5 @@ export const en = {
   'panels.label': 'Global panels',
   'panels.home': 'Open main panel',
   'assistant.label': 'Research assistant',
+  'panels.more': 'More',
 } satisfies Record<SidebarKey, string>

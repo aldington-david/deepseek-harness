@@ -1,18 +1,29 @@
 import { EventEmitter } from 'node:events'
-import { existsSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import {
+  confirmLinuxManager,
+  confirmLinuxManagerAsync,
+  LinuxScopeNotStartedError,
   launchLinuxScope,
+  linuxManagerListener,
   prepareLinuxTerminalScope,
   probeLinuxBootstrap,
   probeLinuxManager,
   probeLinuxNative,
+  probeLinuxNativeAsync,
   probeLinuxScope,
+  probeLinuxScopeAsync,
   signalLinuxDirectProcess,
+  systemdRunIdentity,
 } from '../src/linux-scope.ts'
 import type { LinuxScopeInternals } from '../src/linux-scope.ts'
+import type { BoundProcessOwner } from '../src/managed-owner.ts'
 import {
   consumeLinuxLaunchRequest,
   linuxLaunchFilesFromLocator,
@@ -108,6 +119,11 @@ function recordingSystemctl() {
   return vi.fn((_command: string, _args: readonly string[]) => ({ status: 0, stdout: '', stderr: '' }))
 }
 
+async function signalOwner(owner: BoundProcessOwner, signal: 'SIGTERM' | 'SIGKILL'): Promise<void> {
+  owner.signal(signal)
+  await new Promise<void>((resolve) => { setImmediate(resolve) })
+}
+
 function spec() {
   return {
     argv: ['tool', 'literal arg'],
@@ -130,8 +146,14 @@ function launch(
     return child
   })
   const spawnSync = vi.fn(() => ({ status: 0, stdout: '', stderr: '' }))
-  const systemctlQuery = overrides.systemctlQuery ?? query
-  const result = launchLinuxScope(request, { TARGET: 'yes' }, {
+  const runSync = overrides.spawnSync ?? spawnSync
+  const inspect = overrides.systemctlQuery ?? query
+  const systemctlQuery = inspect === undefined ? undefined : async (command: string, args: readonly string[]) => {
+    if (args[1] !== 'kill' && args[1] !== 'stop') return inspect(command, args)
+    const reply = runSync(command, args, { encoding: 'utf8' })
+    return { ...reply, stdout: String(reply.stdout ?? ''), stderr: String(reply.stderr ?? '') }
+  }
+  const result = launchLinuxScope(request, { TARGET: 'yes' }, ['--expand-environment=no'], {
     spawn: overrides.spawn ?? spawn as never,
     spawnSync: overrides.spawnSync ?? spawnSync as never,
     ...systemctlQuery === undefined ? {} : { systemctlQuery },
@@ -169,7 +191,7 @@ describe('Linux native capability selection', () => {
     expect(signalLinuxDirectProcess(123, () => { throw new Error('signal failed') })).toBe(true)
   })
 
-  it('rechecks bootstrap and literal transient-scope support', () => {
+  it('runs the bootstrap and literal transient-scope checks on every call', () => {
     const spawnSync = vi.fn(() => ({ status: 0, error: undefined }))
     const runnerAvailable = vi.fn(() => true)
     const loadLinuxExecve = vi.fn(() => vi.fn() as never)
@@ -181,21 +203,21 @@ describe('Linux native capability selection', () => {
       systemdRun: '/bin/systemd-run',
       systemctl: '/bin/systemctl',
     }
-    expect(probeLinuxNative(inputs)).toBe(true)
-    expect(probeLinuxNative(inputs)).toBe(true)
+    expect(probeLinuxNative(inputs)).toEqual(['--expand-environment=no'])
+    expect(probeLinuxNative(inputs)).toEqual(['--expand-environment=no'])
     expect(runnerAvailable).toHaveBeenCalledTimes(2)
     expect(loadLinuxExecve).toHaveBeenCalledTimes(2)
     expect(spawnSync).toHaveBeenCalledTimes(2)
-    expect(probeLinuxBootstrap({
-      ...inputs,
-      loadLinuxExecve: () => { throw new Error('libc execve missing') },
-    })).toBe(false)
+    const missingExecve = { ...inputs, loadLinuxExecve: () => { throw new Error('libc execve missing') } }
+    expect(probeLinuxBootstrap(missingExecve)).toBe(false)
+    expect(probeLinuxNative(missingExecve)).toBeUndefined()
+    expect(spawnSync).toHaveBeenCalledTimes(2)
   })
 
   it('reports each failed dynamic prerequisite without executing a target', () => {
     expect(probeLinuxScope({
       spawnSync: vi.fn(() => ({ status: null, error: new Error('missing') })) as never,
-    })).toBe(false)
+    })).toBeUndefined()
     expect(probeLinuxBootstrap({
       loadLinuxExecve: () => vi.fn() as never,
       runnerInvocation: ['/missing'],
@@ -209,7 +231,7 @@ describe('Linux native capability selection', () => {
 
   it('uses the default command adapters and runner resolution', () => {
     childProcessMocks.spawnSync.mockReturnValue({ status: 0, error: undefined })
-    expect(probeLinuxScope()).toBe(true)
+    expect(probeLinuxScope()).toEqual(['--expand-environment=no'])
     expect(probeLinuxManager()).toBe(true)
     expect(childProcessMocks.spawnSync).toHaveBeenCalledTimes(2)
     expect(probeLinuxBootstrap({ loadLinuxExecve: () => vi.fn() as never })).toBe(true)
@@ -225,7 +247,7 @@ describe('Linux native capability selection', () => {
       _args: readonly string[],
       _options: unknown,
     ) => ({ status: 0, error: undefined }))
-    expect(probeLinuxScope({ spawnSync: spawnSync as never })).toBe(true)
+    expect(probeLinuxScope({ spawnSync: spawnSync as never })).toEqual(['--expand-environment=no'])
     expect(probeLinuxManager({ spawnSync: spawnSync as never })).toBe(true)
     const scopeOptions = spawnSync.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }
     const managerOptions = spawnSync.mock.calls[1]?.[2] as { env: NodeJS.ProcessEnv }
@@ -240,9 +262,216 @@ describe('Linux native capability selection', () => {
       spawnSync: vi.fn(() => ({ status: null, error: new Error('missing') })) as never,
     })).toBe(false)
   })
+
+  it('confirms the user manager from a listening socket before querying systemctl', async () => {
+    const runtime = mkdtempSync(join(tmpdir(), 'dsh-runtime-'))
+    directories.push(runtime)
+    const socket = join(runtime, 'systemd', 'private')
+    const table = join(runtime, 'unix')
+    const header = 'Num       RefCount Protocol Flags    Type St Inode Path\n'
+    const row = (flags: string, path: string) => `0000000048ab7e3a: 00000002 00000000 ${flags} 0001 01 2088859725 ${path}\n`
+    const failedQuery = vi.fn(() => ({ status: 1, error: undefined }))
+    const failedAsyncQuery = vi.fn(() => Promise.resolve({ status: 1, stdout: '', stderr: '' }))
+    try {
+      vi.stubEnv('XDG_RUNTIME_DIR', runtime)
+      // A row for the path without the listening flag, such as a connection accepted after the
+      // listener closed, and another path's listener both need the query.
+      writeFileSync(table, header + row('00000000', socket) + row('00010000', `listener ${socket}`))
+      expect(confirmLinuxManager({ spawnSync: failedQuery as never, unixSocketTable: table })).toBe(false)
+      await expect(confirmLinuxManagerAsync(new AbortController().signal, {
+        systemctlQuery: failedAsyncQuery, unixSocketTable: table,
+      })).resolves.toBe(false)
+      expect(failedQuery).toHaveBeenCalledOnce()
+      expect(linuxManagerListener({ unixSocketTable: table })).toBeUndefined()
+      writeFileSync(table, header + row('00010000', socket))
+      expect(linuxManagerListener({ unixSocketTable: table })).toBe('2088859725')
+      expect(confirmLinuxManager({ spawnSync: failedQuery as never, unixSocketTable: table })).toBe(true)
+      await expect(confirmLinuxManagerAsync(new AbortController().signal, {
+        systemctlQuery: failedAsyncQuery, unixSocketTable: table,
+      })).resolves.toBe(true)
+      expect(failedAsyncQuery).toHaveBeenCalledOnce()
+      expect(failedQuery).toHaveBeenCalledOnce()
+      expect(confirmLinuxManager({ spawnSync: failedQuery as never, unixSocketTable: join(runtime, 'missing') })).toBe(false)
+      expect(failedQuery).toHaveBeenCalledTimes(2)
+
+      for (const value of ['', undefined]) {
+        vi.stubEnv('XDG_RUNTIME_DIR', value)
+        const query = vi.fn(() => ({ status: 0, error: undefined }))
+        expect(linuxManagerListener({ unixSocketTable: table })).toBeUndefined()
+        expect(confirmLinuxManager({ spawnSync: query as never, unixSocketTable: table })).toBe(true)
+        expect(query).toHaveBeenCalledOnce()
+      }
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it.skipIf(process.platform !== 'linux')('reads a real listening socket from the kernel socket table', async () => {
+    const runtime = mkdtempSync(join(tmpdir(), 'dsh-运行时-'))
+    directories.push(runtime)
+    mkdirSync(join(runtime, 'systemd'))
+    const server = createServer()
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(join(runtime, 'systemd', 'private'), () => {
+        server.removeListener('error', reject)
+        resolve()
+      })
+    })
+    const query = vi.fn(() => ({ status: 1, error: undefined }))
+    try {
+      vi.stubEnv('XDG_RUNTIME_DIR', runtime)
+      expect(confirmLinuxManager({ spawnSync: query as never })).toBe(true)
+      expect(query).not.toHaveBeenCalled()
+      await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+      expect(confirmLinuxManager({ spawnSync: query as never })).toBe(false)
+      expect(query).toHaveBeenCalledOnce()
+    } finally {
+      vi.unstubAllEnvs()
+      if (server.listening) server.close()
+    }
+  })
+
+  it('matches a socket path outside ASCII in the kernel socket table', () => {
+    const runtime = mkdtempSync(join(tmpdir(), 'dsh-运行时-'))
+    directories.push(runtime)
+    const table = join(runtime, 'unix')
+    writeFileSync(table, `0000000048ab7e3a: 00000002 00000000 00010000 0001 01 77 ${join(runtime, 'systemd', 'private')}\n`)
+    try {
+      vi.stubEnv('XDG_RUNTIME_DIR', runtime)
+      expect(linuxManagerListener({ unixSocketTable: table })).toBe('77')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('identifies the systemd-run binary that PATH resolves', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-path-'))
+    directories.push(root)
+    const fileEntry = join(root, 'file-entry')
+    writeFileSync(fileEntry, '')
+    // A self-referencing symlink makes stat fail with ELOOP instead of reporting no entry.
+    const loop = join(root, 'loop')
+    symlinkSync(loop, loop)
+    const shadow = join(root, 'shadow')
+    mkdirSync(join(shadow, 'systemd-run'), { recursive: true })
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    const binary = join(bin, 'systemd-run')
+    writeFileSync(binary, 'v253')
+    try {
+      vi.stubEnv('PATH', ['', join(root, 'missing'), fileEntry, loop, shadow, bin].join(':'))
+      const installed = systemdRunIdentity()
+      expect(installed).toMatch(/^\d+:\d+:4:/u)
+      expect(systemdRunIdentity()).toBe(installed)
+      // A package upgrade replaces the file, which changes its identity.
+      rmSync(binary)
+      writeFileSync(binary, 'v258.1')
+      const upgraded = systemdRunIdentity()
+      expect(upgraded).not.toBe(installed)
+      expect(systemdRunIdentity({ systemdRun: binary })).toBe(upgraded)
+
+      vi.stubEnv('PATH', join(root, 'missing'))
+      expect(systemdRunIdentity()).toBeUndefined()
+      vi.stubEnv('PATH', undefined)
+      expect(systemdRunIdentity()).toBeUndefined()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('drops the expansion opt-out only for a systemd-run that rejects it', () => {
+    const rejected = { status: 1, stderr: "systemd-run: unrecognized option '--expand-environment=no'\n" }
+    const unavailable = { status: 1, stderr: 'Failed to create bus connection: No such file or directory\n' }
+    const legacy = vi.fn().mockReturnValueOnce(rejected).mockReturnValueOnce({ status: 0, stderr: '' })
+    expect(probeLinuxScope({ spawnSync: legacy as never })).toEqual([])
+    expect(legacy.mock.calls[0]?.[1]).toContain('--expand-environment=no')
+    expect(legacy.mock.calls[1]?.[1]).not.toContain('--expand-environment=no')
+    expect(probeLinuxScope({
+      spawnSync: vi.fn().mockReturnValueOnce(rejected).mockReturnValueOnce(unavailable) as never,
+    })).toBeUndefined()
+    const current = vi.fn(() => unavailable)
+    expect(probeLinuxScope({ spawnSync: current as never })).toBeUndefined()
+    expect(current).toHaveBeenCalledOnce()
+  })
 })
 
 describe('Linux scope establishment and quiescence', () => {
+  it.each([
+    { status: 1, stdout: '', stderr: 'manager unavailable' },
+    { status: null, stdout: '', stderr: '', error: new Error('systemd-run unavailable') },
+  ])('rejects unavailable awaited managers without starting a target', async (reply) => {
+    const query = vi.fn().mockResolvedValue(reply)
+    const signal = new AbortController().signal
+    await expect(probeLinuxScopeAsync(signal, { systemctlQuery: query, systemdRun: '/custom/systemd-run', systemctl: '/custom/systemctl' })).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledOnce()
+    expect(query.mock.calls[0]?.[0]).toBe('/custom/systemd-run')
+    expect(query.mock.calls[0]?.[1]).toContain('/custom/systemctl')
+    await expect(confirmLinuxManagerAsync(signal, {
+      systemctlQuery: query, systemctl: '/custom/systemctl', unixSocketTable: '/missing-socket-table',
+    })).resolves.toBe(false)
+    expect(query.mock.calls[1]?.[0]).toBe('/custom/systemctl')
+    query.mockReset().mockResolvedValueOnce({ status: 1, stdout: '', stderr: 'unrecognized option --expand-environment=no' }).mockResolvedValueOnce(reply)
+    await expect(probeLinuxScopeAsync(signal, { systemctlQuery: query })).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves pre-254 literal argv detection in awaited native allocation', async () => {
+    await expect(probeLinuxNativeAsync(AbortSignal.abort(new Error('cancelled probe')))).rejects.toThrow('cancelled probe')
+    const query = vi.fn()
+      .mockResolvedValueOnce({ status: 1, stdout: '', stderr: "unrecognized option '--expand-environment=no'" })
+      .mockResolvedValueOnce({ status: 0, stdout: 'active', stderr: '' })
+    const inputs = {
+      systemctlQuery: query, loadLinuxExecve: () => vi.fn() as never,
+      runnerInvocation: ['/runner'] as [string, ...string[]], runnerAvailable: () => true,
+    }
+    await expect(probeLinuxNativeAsync(new AbortController().signal, inputs)).resolves.toEqual([])
+    expect(query.mock.calls[0]?.[1]).toContain('--expand-environment=no')
+    expect(query.mock.calls[1]?.[1]).not.toContain('--expand-environment=no')
+    await expect(probeLinuxNativeAsync(new AbortController().signal, { ...inputs, runnerAvailable: () => false })).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(childProcessMocks.spawnSync).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('queries manager prerequisites asynchronously (deep=%s)', async (deep) => {
+    const child = new EventEmitter()
+    childProcessMocks.execFile.mockImplementationOnce((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void
+      queueMicrotask(() => { callback(null, 'active', ''); child.emit('close') })
+      return child
+    })
+    const query = deep ? probeLinuxScopeAsync : confirmLinuxManagerAsync
+    await expect(query(new AbortController().signal, { unixSocketTable: '/missing-socket-table' }))
+      .resolves.toEqual(deep ? ['--expand-environment=no'] : true)
+    expect(childProcessMocks.execFile.mock.calls[0]?.[0]).toBe(deep ? 'systemd-run' : 'systemctl')
+    expect(childProcessMocks.spawnSync).not.toHaveBeenCalled()
+    await expect(query(AbortSignal.abort(new Error('cancelled probe')))).rejects.toThrow('cancelled probe')
+  })
+
+  it('keeps termination asynchronous and joins its manager command before reporting an empty range', async () => {
+    const child = new FakeChild(), killed = Promise.withResolvers<ReturnType<typeof missingUnit>>()
+    let requestPath: string | undefined
+    const result = launchLinuxScope(spec(), {}, ['--expand-environment=no'], {
+      spawn: vi.fn((_command, _args, options) => { requestPath = options.env?.[SUBPROCESS_RUNNER_ENV]; return child }) as never,
+      runnerInvocation: ['/usr/bin/node', '/runner.js'],
+      spawnSync: vi.fn(() => { throw new Error('normal termination must not call spawnSync') }) as never,
+      systemctlQuery: async (_command, args) => args[1] === 'kill' ? killed.promise : activeUnit('inactive'),
+    })
+    if (requestPath === undefined) throw new Error('missing request path')
+    directories.push(linuxLaunchFilesFromLocator(requestPath).directory)
+    consumeLinuxLaunchRequest(requestPath)
+    child.exit(0, null)
+    let empty = false
+    result.owner.signal('SIGKILL')
+    const stopped = result.owner.waitForExit().then(() => { empty = true })
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    expect(empty).toBe(false)
+    killed.resolve({ status: 0, stdout: '', stderr: '' })
+    await stopped
+    await result.direct
+    result.owner.cleanup?.()
+  })
+
   it.each(['abort', 'terminate'] as const)('settles and cleans a managed handle after early %s', async (action) => {
     const { child, result, requestPath } = launch(async () => missingUnit())
     const processKill = vi.spyOn(process, 'kill')
@@ -264,9 +493,10 @@ describe('Linux scope establishment and quiescence', () => {
     { exitCode: null, signal: 'SIGSEGV' as const },
   ])('retains unrelated bootstrap failure $exitCode / $signal after a termination request', async (outcome) => {
     const { child, result } = launch(async () => missingUnit())
-    result.owner.signal('SIGTERM')
+    await signalOwner(result.owner, 'SIGTERM')
     child.exit(outcome.exitCode, outcome.signal)
-    await expect(result.direct).rejects.toThrow('before its bootstrap consumed')
+    await expect(result.direct).rejects.toBeInstanceOf(LinuxScopeNotStartedError)
+    await expect(result.direct).rejects.toThrow(/before its bootstrap consumed.*probes native containment again before its next command/u)
     await expect(result.owner.waitForExit()).resolves.toBeUndefined()
     result.owner.cleanup?.()
   })
@@ -275,10 +505,10 @@ describe('Linux scope establishment and quiescence', () => {
     const { child, result, requestPath, spawnSync } = launch(async () => missingUnit())
     const processKill = vi.spyOn(process, 'kill')
     const waiting = result.owner.waitForExit()
-    result.owner.signal('SIGTERM')
+    await signalOwner(result.owner, 'SIGTERM')
     expect(processKill).toHaveBeenCalledWith(321, 'SIGTERM')
     expect(spawnSync).toHaveBeenCalledWith('/bin/systemctl', expect.arrayContaining([
-      'kill', '--kill-whom=all', '--signal=SIGTERM',
+      'kill', '--kill-who=all', '--signal=SIGTERM',
     ]), expect.anything())
     const direct = expect(result.direct).resolves.toEqual({ exitCode: null, signal: 'SIGTERM' })
     child.exit(null, 'SIGTERM')
@@ -300,7 +530,7 @@ describe('Linux scope establishment and quiescence', () => {
     child.exit(0, null)
     await expect(result.direct).resolves.toEqual({ exitCode: 0, signal: null })
     await expect(waiting).resolves.toBeUndefined()
-    result.owner.signal('SIGKILL')
+    await signalOwner(result.owner, 'SIGKILL')
     result.owner.cleanup?.()
     expect(existsSync(linuxLaunchFilesFromLocator(requestPath).directory)).toBe(false)
   })
@@ -315,10 +545,10 @@ describe('Linux scope establishment and quiescence', () => {
     consumeLinuxLaunchRequest(requestPath)
     const processKill = vi.spyOn(process, 'kill').mockReturnValue(true)
 
-    result.owner.signal('SIGTERM')
+    await signalOwner(result.owner, 'SIGTERM')
     expect(processKill).not.toHaveBeenCalled()
 
-    result.owner.signal(signal)
+    await signalOwner(result.owner, signal)
     expect(processKill.mock.calls).toEqual(signal === 'SIGKILL'
       ? [[-321, signal], [321, signal]]
       : [[-321, signal]])
@@ -394,7 +624,7 @@ describe('Linux scope establishment and quiescence', () => {
     consumeLinuxLaunchRequest(launched.requestPath)
     const waiting = launched.result.owner.waitForExit()
     await sleeping.promise
-    launched.result.owner.signal('SIGTERM')
+    await signalOwner(launched.result.owner, 'SIGTERM')
     await expect(waiting).resolves.toBeUndefined()
     expect(sleep).toHaveBeenCalledOnce()
     expect(sleep.mock.calls[0]?.[0]).toBe(50)
@@ -412,7 +642,7 @@ describe('Linux scope establishment and quiescence', () => {
     const launched = launch(query, { sleep })
     consumeLinuxLaunchRequest(launched.requestPath)
     const waiting = launched.result.owner.waitForExit()
-    launched.result.owner.signal('SIGTERM')
+    await signalOwner(launched.result.owner, 'SIGTERM')
     firstQuery.resolve(activeUnit())
     await expect(waiting).resolves.toBeUndefined()
     expect(sleep).not.toHaveBeenCalled()
@@ -433,7 +663,7 @@ describe('Linux scope establishment and quiescence', () => {
   it('preserves a recorded pre-exec failure even when cancellation also terminates the bootstrap', async () => {
     const { child, result, requestPath } = launch(async () => missingUnit())
     const files = linuxLaunchFilesFromLocator(requestPath)
-    result.owner.signal('SIGTERM')
+    await signalOwner(result.owner, 'SIGTERM')
     unlinkSync(requestPath)
     writeLinuxStartupError(files, {
       type: 'error',
@@ -466,7 +696,7 @@ describe('Linux scope establishment and quiescence', () => {
       spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: 'permission denied' })) as never,
     })
     vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('denied'), { code: 'EPERM' }) })
-    killFailed.result.owner.signal('SIGKILL')
+    await signalOwner(killFailed.result.owner, 'SIGKILL')
     await expect(killFailed.result.owner.waitForExit()).rejects.toThrow('could not signal')
     killFailed.result.owner.cleanup?.()
   })
@@ -484,7 +714,7 @@ describe('Linux scope establishment and quiescence', () => {
     })
     consumeLinuxLaunchRequest(launched.requestPath)
     const waiting = launched.result.owner.waitForExit()
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     launched.child.exit(null, 'SIGKILL')
     beforeKill.resolve(activeUnit())
     await expect(waiting).resolves.toBeUndefined()
@@ -505,7 +735,7 @@ describe('Linux scope establishment and quiescence', () => {
     })
     consumeLinuxLaunchRequest(launched.requestPath)
     const waiting = launched.result.owner.waitForExit()
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     launched.child.exit(null, 'SIGKILL')
     beforeKill.resolve(activeUnit('inactive'))
     await expect(waiting).rejects.toThrow('Invalid argument')
@@ -520,7 +750,7 @@ describe('Linux scope establishment and quiescence', () => {
       .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'Invalid argument' })
     const launched = launch(async () => activeUnitWithTasks('0'), { spawnSync: spawnSync as never })
     consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     launched.child.exit(null, 'SIGKILL')
     await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
     await expect(launched.result.direct).resolves.toEqual({ exitCode: null, signal: 'SIGKILL' })
@@ -552,7 +782,7 @@ describe('Linux scope establishment and quiescence', () => {
         ...spec(), stdio: { ...spec().stdio, control: 'pipe' },
       })
       consumeLinuxLaunchRequest(launched.requestPath)
-      launched.result.owner.signal('SIGKILL')
+      await signalOwner(launched.result.owner, 'SIGKILL')
       let completed = false
       const waiting = launched.result.owner.waitForExit().finally(() => { completed = true })
       void waiting.catch(() => {})
@@ -590,7 +820,7 @@ describe('Linux scope establishment and quiescence', () => {
       spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: 'permission denied' })) as never,
     })
     consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     try {
       await expect(launched.result.owner.waitForExit()).rejects.toThrow('permission denied')
       expect(launched.child.signalCode).toBeNull()
@@ -624,7 +854,7 @@ describe('Linux scope establishment and quiescence', () => {
     const direct = launched.result.direct.finally(() => { directSettled = true })
     void direct.catch(() => {})
     consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     let failure: unknown
     const waiting = launched.result.owner.waitForExit().catch((error: unknown) => { failure = error })
     try {
@@ -655,7 +885,7 @@ describe('Linux scope establishment and quiescence', () => {
       spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: 'Invalid argument' })) as never,
     })
     consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     launched.child.exit(null, 'SIGKILL')
     await expect(launched.result.owner.waitForExit()).rejects.toThrow('Invalid argument')
     expect(query).toHaveBeenCalledOnce()
@@ -673,7 +903,7 @@ describe('Linux scope establishment and quiescence', () => {
       spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: 'Invalid argument' })) as never,
     })
     consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     const waiting = launched.result.owner.waitForExit()
     firstRead.resolve(activeUnitWithTasks('1'))
     await new Promise<void>(resolve => setImmediate(resolve))
@@ -693,7 +923,7 @@ describe('Linux scope establishment and quiescence', () => {
       spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: 'Invalid argument' })) as never,
     })
     consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     await expect(launched.result.owner.waitForExit()).rejects.toBe(failure)
     expect(launched.child.signalCode).toBeNull()
     launched.child.exit(null, 'SIGKILL')
@@ -707,7 +937,7 @@ describe('Linux scope establishment and quiescence', () => {
       .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'Invalid argument' })
     const launched = launch(async () => activeUnitWithTasks('0'), { spawnSync: spawnSync as never })
     consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     try {
       await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
       expect(launched.child.exitCode).toBeNull()
@@ -733,7 +963,7 @@ describe('Linux scope establishment and quiescence', () => {
       vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('denied'), { code: 'EPERM' }) })
     }
     if (!clientRunning) consumeLinuxLaunchRequest(launched.requestPath)
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     if (!clientRunning) launched.child.exit(null, 'SIGKILL')
     await expect(launched.result.owner.waitForExit()).rejects.toThrow('Invalid argument')
     expect(spawnSync).toHaveBeenCalledOnce()
@@ -749,7 +979,9 @@ describe('Linux scope establishment and quiescence', () => {
       expect(options.env).toMatchObject({ LC_ALL: 'C' })
       expect(options.env).not.toHaveProperty('SYSTEMD_LOG_TARGET')
       callback(null, 'LoadState=loaded\nActiveState=inactive\n', 'manager diagnostic remains readable')
-      return new EventEmitter()
+      const child = new EventEmitter()
+      queueMicrotask(() => { child.emit('close') })
+      return child
     })
     const stopped = launch(undefined)
     await expect(stopped.result.owner.waitForExit()).resolves.toBeUndefined()
@@ -759,7 +991,9 @@ describe('Linux scope establishment and quiescence', () => {
     childProcessMocks.execFile.mockImplementationOnce((...args: unknown[]) => {
       const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void
       callback(queryError, '', '')
-      return new EventEmitter()
+      const child = new EventEmitter()
+      queueMicrotask(() => { child.emit('close') })
+      return child
     })
     const failed = launch(undefined)
     await expect(failed.result.owner.waitForExit()).rejects.toBe(queryError)
@@ -791,11 +1025,11 @@ describe('Linux scope establishment and quiescence', () => {
     denyProcessGroups()
     const spawnSync = recordingSystemctl()
     const launched = launch(async () => activeUnitWithTasks('0'), { spawnSync: spawnSync as never })
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     launched.child.exit(null, 'SIGKILL')
     await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
     expect(spawnSync.mock.calls.map(call => call[1])).toEqual([
-      ['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', expect.stringMatching(/\.scope$/u)],
+      ['--user', 'kill', '--kill-who=all', '--signal=SIGKILL', expect.stringMatching(/\.scope$/u)],
       ['--user', 'stop', expect.stringMatching(/\.scope$/u)],
     ])
     launched.result.owner.cleanup?.()
@@ -807,7 +1041,7 @@ describe('Linux scope establishment and quiescence', () => {
       .mockImplementationOnce(() => ({ status: 0, stdout: '', stderr: '' }))
       .mockImplementationOnce(() => { throw new Error('systemctl is gone') })
     const launched = launch(async () => activeUnitWithTasks('0'), { spawnSync: spawnSync as never })
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     launched.child.exit(null, 'SIGKILL')
     await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
     launched.result.owner.cleanup?.()
@@ -820,7 +1054,7 @@ describe('Linux scope establishment and quiescence', () => {
     const launched = launch(async () => states.shift() ?? unloadedUnit(), {
       spawnSync: spawnSync as never,
     })
-    launched.result.owner.signal('SIGTERM')
+    await signalOwner(launched.result.owner, 'SIGTERM')
     await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
     expect(spawnSync.mock.calls.map(call => call[1]?.[1])).toEqual(['kill'])
     launched.result.owner.cleanup?.()
@@ -854,10 +1088,10 @@ describe('Linux scope establishment and quiescence', () => {
     })
     launched.child.pid = undefined
     unlinkSync(launched.requestPath)
-    launched.result.owner.signal('SIGTERM')
-    launched.result.owner.signal('SIGKILL')
-    launched.result.owner.signal('SIGKILL')
-    launched.result.owner.signal('SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGTERM')
+    await signalOwner(launched.result.owner, 'SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
+    await signalOwner(launched.result.owner, 'SIGKILL')
     await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
     await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
     launched.result.owner.terminateForHostExit()
@@ -880,7 +1114,7 @@ describe('Linux scope establishment and quiescence', () => {
       spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: 'kill denied' })) as never,
     })
     vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('missing process group') })
-    killFailed.result.owner.signal('SIGKILL')
+    await signalOwner(killFailed.result.owner, 'SIGKILL')
     await expect(killFailed.result.owner.waitForExit()).rejects.toThrow('kill denied')
     killFailed.result.owner.cleanup?.()
   })
@@ -913,7 +1147,7 @@ describe('Linux scope establishment and quiescence', () => {
     const launched = launch(async () => activeUnit('inactive'))
     launched.child.pid = undefined
     const processKill = vi.spyOn(process, 'kill')
-    launched.result.owner.signal('SIGTERM')
+    await signalOwner(launched.result.owner, 'SIGTERM')
     expect(processKill).not.toHaveBeenCalled()
     expect(launched.child.kills).toEqual([])
     consumeLinuxLaunchRequest(launched.requestPath)
@@ -929,7 +1163,7 @@ describe('Linux scope establishment and quiescence', () => {
     await expect(result.direct).resolves.toEqual({ exitCode: 0, signal: null })
     const processKill = vi.spyOn(process, 'kill')
 
-    result.owner.signal('SIGTERM')
+    await signalOwner(result.owner, 'SIGTERM')
     result.owner.terminateForHostExit()
 
     expect(processKill).not.toHaveBeenCalled()
@@ -962,7 +1196,7 @@ describe('Linux PTY bootstrap reuse', () => {
   } as const
 
   it.each(['SIGTERM', 'SIGKILL'] as const)('preserves %s before bootstrap consumption and joins the empty scope', async (signal) => {
-    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' }, {
+    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' }, ['--expand-environment=no'], {
       spawnSync: vi.fn(() => missingUnit()) as never,
       systemctlQuery: async () => missingUnit(),
     })
@@ -983,7 +1217,7 @@ describe('Linux PTY bootstrap reuse', () => {
   })
 
   it('uses the same request/bootstrap, preserves argv, and cleans after owner settlement', async () => {
-    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' }, {
+    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' }, [], {
       systemdRun: '/bin/systemd-run',
       systemctl: '/bin/systemctl',
       runnerInvocation: ['/usr/bin/node', '/runner.js'],
@@ -992,7 +1226,10 @@ describe('Linux PTY bootstrap reuse', () => {
     })
     const requestPath = scope.env[SUBPROCESS_RUNNER_ENV]
     if (requestPath === undefined) throw new Error('missing PTY request')
-    expect(scope.args.slice(-3)).toEqual(['--', 'bash', '--noprofile'])
+    expect(scope.args).toEqual([
+      '--user', '--scope', '--quiet', '--collect', expect.stringMatching(/^--unit=dsh-terminal-/u),
+      '--', '/usr/bin/node', '/runner.js', '--', 'bash', '--noprofile',
+    ])
     expect(consumeLinuxLaunchRequest(requestPath)).toEqual({ cwd: '/target', env: { TARGET: 'yes' } })
     const owner = scope.bindOwner({ running: () => false, signal: vi.fn(() => true), settled: Promise.resolve() })
     await expect(owner.waitForExit()).resolves.toBeUndefined()
@@ -1002,7 +1239,7 @@ describe('Linux PTY bootstrap reuse', () => {
   })
 
   it('surfaces PTY pre-exec errors instead of launcher outcomes', () => {
-    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' })
+    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' }, ['--expand-environment=no'])
     const requestPath = scope.env[SUBPROCESS_RUNNER_ENV]
     if (requestPath === undefined) throw new Error('missing PTY request')
     const files = linuxLaunchFilesFromLocator(requestPath)
@@ -1015,7 +1252,7 @@ describe('Linux PTY bootstrap reuse', () => {
   })
 
   it('uses default owner dependencies and rejects an unconsumed request', () => {
-    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' })
+    const scope = prepareLinuxTerminalScope(terminalSpec, { TARGET: 'yes' }, ['--expand-environment=no'])
     const requestPath = scope.env[SUBPROCESS_RUNNER_ENV]
     if (requestPath === undefined) throw new Error('missing PTY request')
     directories.push(linuxLaunchFilesFromLocator(requestPath).directory)
@@ -1031,13 +1268,16 @@ describe('Linux ordinary launch adapters', () => {
   it('uses the default launch dependencies without changing the target request', async () => {
     const child = new FakeChild()
     childProcessMocks.spawn.mockReturnValue(child)
-    const result = launchLinuxScope(spec(), { TARGET: 'yes' })
+    const result = launchLinuxScope(spec(), { TARGET: 'yes' }, ['--expand-environment=no'])
     const call = childProcessMocks.spawn.mock.calls[0]
     const options = call?.[2] as { env?: NodeJS.ProcessEnv } | undefined
     const requestPath = options?.env?.[SUBPROCESS_RUNNER_ENV]
     if (requestPath === undefined) throw new Error('launch did not publish a request locator')
     directories.push(linuxLaunchFilesFromLocator(requestPath).directory)
     expect(call?.[0]).toBe('systemd-run')
+    expect((call?.[1] as string[] | undefined)?.slice(0, 5)).toEqual([
+      '--user', '--scope', '--quiet', '--collect', '--expand-environment=no',
+    ])
     expect(consumeLinuxLaunchRequest(requestPath)).toEqual({ cwd: '/target', env: { TARGET: 'yes' } })
     child.exit(0, null)
     await expect(result.direct).resolves.toEqual({ exitCode: 0, signal: null })
@@ -1047,7 +1287,7 @@ describe('Linux ordinary launch adapters', () => {
   it('removes the private launch directory when spawn throws synchronously', () => {
     const spawnError = new Error('synchronous spawn failure')
     let requestPath: string | undefined
-    expect(() => launchLinuxScope(spec(), { TARGET: 'yes' }, {
+    expect(() => launchLinuxScope(spec(), { TARGET: 'yes' }, ['--expand-environment=no'], {
       runnerInvocation: ['/usr/bin/node', '/runner.js'],
       spawn: vi.fn((_command: string, _args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
         requestPath = options.env?.[SUBPROCESS_RUNNER_ENV]
@@ -1061,7 +1301,7 @@ describe('Linux ordinary launch adapters', () => {
 
 it('observes native task counts independently from process-tree membership', () => {
   const terminalSpec = { argv: ['/bin/bash', '-i'], cwd: process.cwd(), rows: 24, cols: 80, terminalType: 'xterm-256color', graceMs: 100 }
-  const scope = prepareLinuxTerminalScope(terminalSpec, {}, { spawnSync: childProcessMocks.spawnSync })
+  const scope = prepareLinuxTerminalScope(terminalSpec, {}, ['--expand-environment=no'], { spawnSync: childProcessMocks.spawnSync })
   const owner = scope.bindOwner({ running: () => true, signal: () => true, settled: Promise.resolve() })
   try {
     for (const tasks of [1, 2, 0]) {

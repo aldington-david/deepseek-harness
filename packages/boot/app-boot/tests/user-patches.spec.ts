@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import Schema from '@deepseek-ai/schemastery'
 import Include, { type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import {
@@ -331,13 +332,55 @@ describe('Loader entry disabled interpolation', () => {
 })
 
 describe('profile reconciliation settlement', () => {
+  it('rejects reconciliation on root shutdown so its caller can drain before disposal completes', async () => {
+    const dir = tmp()
+    const entered = Promise.withResolvers<undefined>()
+    const stopping = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const cleanup = Promise.withResolvers<undefined>()
+    const probe = {
+      stopping: () => { stopping.resolve(undefined) }, cleanup: cleanup.promise, current: Promise.resolve<unknown>(undefined),
+    }
+    writeFileSync(join(dir, 'cordis.yml'), '[]\n')
+    writeFileSync(join(dir, 'caller.mjs'), [
+      'export function apply(ctx) {',
+      '  const probe = ctx.get("shutdownProbe")',
+      '  ctx.effect(() => async () => { probe.stopping(); await Promise.race([probe.current, probe.cleanup]) })',
+      '}',
+    ].join('\n'))
+    const patches = [{ insert: [{ id: 'caller', name: './caller.mjs' }, { id: 'worker', name: 'cordis:worker', config: { pause: false } }] }]
+    const ctx = await boot(NAME, join(dir, 'cordis.yml'), patches, (host) => {
+      host.provide('shutdownProbe', probe)
+      host.loader.builtins.worker = {
+        Config: Schema.object({ pause: Schema.boolean().default(false) }),
+        async apply(_ctx: Context, config: { pause: boolean }) {
+          if (config.pause) { entered.resolve(undefined); await release.promise }
+        },
+      }
+    })
+    onTestFinished(async () => { cleanup.resolve(undefined); release.resolve(undefined); await ctx.fiber.dispose(); await probe.current })
+    const worker = [...ctx.loader.entries()].find(entry => entry.options.id === 'worker')!
+    await worker.update({ config: { pause: true } })
+    await entered.promise
+    const operation = reconcileProfilePatches(ctx, [...patches, { id: 'worker', config: { pause: true } }], NAME)
+    probe.current = operation.catch(() => {})
+    const closing = ctx.fiber.dispose()
+    await stopping.promise
+    release.resolve(undefined)
+    await expect(operation).rejects.toThrow('profile recomposition interrupted by shutdown')
+    await closing
+  })
+
   it('retains unchanged import diagnostics across profile reconciliation', async () => {
     const dir = tmp()
     writeFileSync(join(dir, 'cordis.yml'), '[]\n')
     const patches = [{ insert: [{ id: 'missing-plugin', name: './missing.mjs' }] }]
     const ctx = await boot(NAME, join(dir, 'cordis.yml'), patches)
     onTestFinished(() => ctx.fiber.dispose())
-    expect(await reconcileProfilePatches(ctx, patches, NAME)).toEqual(['missing-plugin (./missing.mjs): failed to import'])
+    // Reload diagnostics carry the import error's message without stack frames.
+    const prefix = 'missing-plugin \\(\\./missing\\.mjs\\): failed to import: Error \\[ERR_MODULE_NOT_FOUND\\]'
+    const diagnostic = new RegExp(`^${prefix}: Cannot find module '[^']*missing\\.mjs' imported from [^\\n]*$`, 'u')
+    expect(await reconcileProfilePatches(ctx, patches, NAME)).toEqual([expect.stringMatching(diagnostic)])
   })
 
   it('rejects a context without the launcher root Include', async () => {
