@@ -61,10 +61,10 @@ describe('awaited ordinary allocation', () => {
       check.resolve([])
       const handles = await Promise.all([first, second])
       expect(probes.launch).toHaveBeenCalledTimes(2)
-      targets.forEach(target => target.stop())
+      targets.forEach((target) => { target.stop() })
       await Promise.all(handles.map(handle => handle.done))
       await Promise.all(handles.map(handle => handle.waitForExit()))
-    } finally { check.resolve(undefined); targets.forEach(target => target.stop()); await fiber.dispose() }
+    } finally { check.resolve(undefined); targets.forEach((target) => { target.stop() }); await fiber.dispose() }
   })
 
   it('cancels one waiting allocation without cancelling another request', async () => {

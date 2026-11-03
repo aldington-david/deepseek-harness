@@ -171,7 +171,7 @@ function collectSourceFileUses(
       && (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node))) {
       uses.add('react')
     }
-    ts.forEachChild(node, child => visit(child, attachedJsDoc))
+    ts.forEachChild(node, (child) => { visit(child, attachedJsDoc) })
     if (includeJsDoc && attachedJsDoc) {
       for (const doc of ts.getJSDocCommentsAndTags(node)) visit(doc, false)
     }

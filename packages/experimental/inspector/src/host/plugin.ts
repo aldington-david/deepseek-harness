@@ -136,7 +136,8 @@ export async function apply(ctx: Context, config: HostPluginConfig): Promise<voi
       disposers.push(ctx.webServer.registerUpgrade({
         path: `${DEVTOOLS_PATH}/cdp`,
         handler: async (req, socket, head) => {
-          if (disposed || socket.destroyed) {
+          const isInactive = (): boolean => disposed || socket.destroyed
+          if (isInactive()) {
             socket.destroy()
             return
           }
@@ -145,7 +146,7 @@ export async function apply(ctx: Context, config: HostPluginConfig): Promise<voi
           track(socket)
           try {
             const rejection = await ctx.connection.requestRejection(req)
-            if (disposed || socket.destroyed) return
+            if (isInactive()) return
             if (rejection !== undefined) {
               const reason = rejection === 401 ? 'Unauthorized' : 'Forbidden'
               socket.end(`HTTP/1.1 ${rejection} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)

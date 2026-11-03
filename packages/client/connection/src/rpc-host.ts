@@ -132,8 +132,8 @@ export class HostConnectionService extends Service implements HostConnectionHand
     if (!this.isTrusted(request)) return { rejection: 403 }
     if (this.disposed) return { rejection: 401 }
     const secure = this.owner.get('webServer')?.protocol === 'https:'
-    const external = await this.owner.waterfall('connection/authenticate', request, async () => undefined)
-    if (this.disposed) return { rejection: 401 }
+    const external = await this.owner.waterfall('connection/authenticate', request, () => Promise.resolve(undefined))
+    if (this.isDisposed()) return { rejection: 401 }
     if (external === false) return { rejection: 401 }
     if (external === true && !this.browserAuth.hasApiCookie(request, secure)) return { peer: this.browserPeer }
     if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
@@ -174,6 +174,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
     return isTrustedApiRequest(request, this.trustedHosts, carrier?.host, carrier?.protocol ?? 'http:')
   }
 
+  /** Re-read disposal after asynchronous authentication. */
+  private isDisposed(): boolean {
+    return this.disposed
+  }
+
   private publishPeer(interactions: ConnectionInteractions): PeerId {
     const peer = new Peer(this.owner, { principal: { kind: 'owner' }, interactions })
     this.peers.set(peer.id, { peer, ownsSocket: false })
@@ -201,7 +206,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
   async authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean> {
     const secure = this.owner.get('webServer')?.protocol === 'https:'
     const external = this.disposed ? false
-      : await this.owner.waterfall('connection/authenticate', request, async () => undefined)
+      : await this.owner.waterfall('connection/authenticate', request, () => Promise.resolve(undefined))
     if (this.disposed || external === false) {
       response.writeHead(401, { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' })
       response.end(request.method === 'HEAD' ? undefined : 'dsh web authentication required\n')
