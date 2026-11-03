@@ -79,4 +79,15 @@ describe('causality faces', () => {
       expect(als.getStore()).toBe('caller')
     })
   })
+
+  it('preserves an explicitly empty root when binding without masking an unscoped callback', () => {
+    const als = new AsyncLocalStorage<string>()
+    const unscoped = AsyncLocalStorage.bind(() => als.getStore())
+    const atRoot = runAtAsyncContextRoot(() => AsyncLocalStorage.bind(() => als.getStore()))
+    als.run('caller', () => {
+      expect(unscoped()).toBe('caller')
+      expect(atRoot()).toBeUndefined()
+      expect(als.getStore()).toBe('caller')
+    })
+  })
 })

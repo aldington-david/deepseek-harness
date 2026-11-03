@@ -72,3 +72,35 @@ test('an fs.watchFile listener created outside a store does not read the writerâ
   als.run('transaction', () => { workerFs.writeFileSync(file, '{"changed":true}') })
   await expect(observed).resolves.toBeUndefined()
 })
+
+test('a watcher timer and stat callback retain the watcher context while a writer transaction remains open', async () => {
+  const als = new AsyncLocalStorage<string>()
+  const file = `${ROOT}/delayed.json`
+  workerFs.writeFileSync(file, '{}')
+  const observed = Promise.withResolvers<(string | undefined)[]>()
+  const release = Promise.withResolvers<undefined>()
+  const seen: (string | undefined)[] = []
+  const watcher = workerFs.watch(file, () => {
+    seen.push(als.getStore())
+    setTimeout(() => {
+      seen.push(als.getStore())
+      workerFs.stat(file, (error) => {
+        if (error !== null) { observed.reject(error); return }
+        seen.push(als.getStore())
+        observed.resolve(seen)
+      })
+    }, 0)
+  })
+  const writing = als.run('transaction', async () => {
+    workerFs.writeFileSync(file, '{"changed":true}')
+    await release.promise
+  })
+  try {
+    expect(await observed.promise).toEqual([undefined, undefined, undefined])
+  } finally {
+    release.resolve(undefined)
+    await writing
+    watcher.close()
+    als.disable()
+  }
+})
