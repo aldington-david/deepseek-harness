@@ -480,7 +480,11 @@ describe.skipIf(process.platform === 'win32')('Web sidebar terminal', () => {
     expect(saved).toHaveLength(2)
     const selected = second.locator('[data-dockkit-tab][aria-selected="true"]')
     await selected.hover()
-    await selected.locator('[data-dockkit-tab-close]').click()
+    const [closed] = await Promise.all([
+      second.waitForResponse(response => new URL(response.url()).pathname === '/api/terminal/close' && response.request().method() === 'POST'),
+      selected.locator('[data-dockkit-tab-close]').click(),
+    ])
+    expect(closed.ok()).toBe(true)
     await expect.poll(() => alive(secondProcess)).toBe(false)
     expect(alive(firstProcess)).toBe(true)
     await expect.poll(() => bindings()).toHaveLength(1)
