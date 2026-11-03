@@ -4,12 +4,13 @@ import { createLayoutStore } from '../src/client/stores.ts'
 import { WebViewController } from '../src/client/web-view.ts'
 
 const origin = 'https://widget.example.test'
-let parent: { postMessage: ReturnType<typeof vi.fn> }
+type PostMessage = (message: Record<string, unknown>, targetOrigin: string) => void
+let parent: { postMessage: ReturnType<typeof vi.fn<PostMessage>> }
 const cleanups: (() => void)[] = []
 
 beforeEach(() => {
   localStorage.clear()
-  parent = { postMessage: vi.fn() }
+  parent = { postMessage: vi.fn<PostMessage>() }
   vi.stubGlobal('parent', parent)
   vi.stubGlobal('__DSH_EMBED_ORIGINS__', [origin])
   history.replaceState({}, '', `/?dsh_embed_origin=${encodeURIComponent(origin)}`)
@@ -25,7 +26,7 @@ afterEach(() => {
 function start() {
   const instance = createLayoutStore().create()
   const view = new WebViewController(instance)
-  cleanups.push(() => view.dispose())
+  cleanups.push(() => { view.dispose() })
   return { instance, view }
 }
 function context(payload: object, source = window.parent, from = origin) {
@@ -39,12 +40,24 @@ function hostResult(requestId: string, result: object, source = window.parent, f
   } }))
 }
 
+function lastMessage(): Record<string, unknown> {
+  const message = parent.postMessage.mock.calls.at(-1)?.[0]
+  if (message === undefined) throw new Error('The frame did not send a host message')
+  return message
+}
+
+function lastRequest(): Record<string, unknown> & { requestId: string } {
+  const message = lastMessage()
+  if (typeof message.requestId !== 'string') throw new Error('The last host message has no request id')
+  return { ...message, requestId: message.requestId }
+}
+
 describe('embedded original Web view', () => {
   it('forwards a protected URL only to the trusted host and accepts only its matching v1 response', async () => {
     const { view } = start()
     context({ context: { displayMode: 'inline' } })
     const pending = view.openLink('https://dsh.example.test/report?period=daily')
-    const request = parent.postMessage.mock.calls.at(-1)?.[0]
+    const request = lastRequest()
     expect(request).toMatchObject({ type: 'dsh:web-host-request', version: 1, action: 'open-link',
       payload: { url: 'https://dsh.example.test/report?period=daily' } })
     let completed = false
@@ -66,7 +79,7 @@ describe('embedded original Web view', () => {
     const file = { name: 'research.json', mimeType: 'application/json' as const,
       text: '{"amount":"9999999999999999.000001","value":false}' }
     const pending = view.downloadFile(file)
-    const request = parent.postMessage.mock.calls.at(-1)?.[0]
+    const request = lastRequest()
     expect(request).toMatchObject({ action: 'download-file', payload: file })
     const rejected = expect(pending).rejects.toThrow('宿主拒绝下载')
     hostResult(request.requestId, { ok: false, error: '宿主拒绝下载' })
@@ -81,7 +94,7 @@ describe('embedded original Web view', () => {
     context({ context: { displayMode: 'inline' } })
     const file = { name: 'engine-state.bin', blob, mimeType: 'application/octet-stream' as const }
     const pending = view.downloadFile(file)
-    const request = parent.postMessage.mock.calls.at(-1)?.[0]
+    const request = lastRequest()
     expect(request).toMatchObject({ action: 'download-file', payload: file })
     expect(request.payload).not.toHaveProperty('text')
     const rejected = expect(pending).rejects.toThrow('宿主拒绝下载')
@@ -90,7 +103,7 @@ describe('embedded original Web view', () => {
     expect(instance.getSnapshot().webActionError).toBeNull()
     expect(view.read('engine-state.bin')).toBeUndefined()
     const retry = view.downloadFile(file)
-    hostResult(parent.postMessage.mock.calls.at(-1)?.[0].requestId, { ok: true })
+    hostResult(lastRequest().requestId, { ok: true })
     await retry
   })
 
@@ -120,7 +133,7 @@ describe('embedded original Web view', () => {
     document.addEventListener('click', preventNavigation)
     cleanups.push(() => { document.removeEventListener('click', preventNavigation) })
     link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    const request = parent.postMessage.mock.calls.at(-1)?.[0]
+    const request = lastRequest()
     expect(request).toMatchObject({ action: 'open-link', payload: { url: link.href } })
     hostResult(request.requestId, { ok: false, error: '宿主拒绝打开链接' })
     await vi.waitFor(() => { expect(instance.getSnapshot().webActionError).toBe('宿主拒绝打开链接') })
@@ -203,9 +216,10 @@ describe('embedded original Web view', () => {
     expect(view.read('journal')).toEqual({ draft: 'still editing' })
     expect(view.initialPage).toBe('journal')
     expect(view.getSnapshot()).toMatchObject({ scope: 'fullscreen', platform: 'mobile', ready: true })
-    expect(parent.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({
-      type: 'dsh:web-view-state', version: 1, viewState: expect.objectContaining({ journal: { draft: 'still editing' } }),
-    }), origin)
+    expect(lastMessage()).toMatchObject({
+      type: 'dsh:web-view-state', version: 1, viewState: { journal: { draft: 'still editing' } },
+    })
+    expect(parent.postMessage.mock.calls.at(-1)?.[1]).toBe(origin)
   })
 
   it('keeps manual layout choices per display position and includes them in the private snapshot', () => {
@@ -219,8 +233,7 @@ describe('embedded original Web view', () => {
     context({ context: { displayMode: 'inline', platform: 'desktop' } })
     expect(view.getSnapshot().preferences.inline).toBe('desktop')
     expect(view.getSnapshot().preferences.fullscreen).toBe('mobile')
-    const snapshot = parent.postMessage.mock.calls.at(-1)?.[0].viewState
-    expect(snapshot.layout.preferences).toMatchObject({ inline: 'desktop', fullscreen: 'mobile' })
+    expect(lastMessage()).toMatchObject({ viewState: { layout: { preferences: { inline: 'desktop', fullscreen: 'mobile' } } } })
   })
 
   it('leaves a normal top-level page usable and removes the listener on disposal', () => {

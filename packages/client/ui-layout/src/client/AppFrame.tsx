@@ -316,7 +316,7 @@ export function AppFrame({
         <span>{webActionError}</span>
         <button type="button" aria-label={t('close')} onClick={() => { actions.reportWebActionError(null) }}>{t('close')}</button>
       </div>}
-      {phone && !sidebarCollapsed && <button type="button" className={css.mobileBackdrop} aria-label={t('close')} onClick={() => actions.toggleSidebar()} />}
+      {phone && !sidebarCollapsed && <button type="button" className={css.mobileBackdrop} aria-label={t('close')} onClick={() => { actions.toggleSidebar() }} />}
       {leadingMounted && (
         <div className={css.leadingSeat} data-shell-leading>
           {leading}

@@ -201,7 +201,7 @@ export function apply(ctx: ClientContext): void {
     const restorePanel = webView.onRestore((state) => {
       const saved = state.layout
       if (saved === null || typeof saved !== 'object') return
-      const panelId = Reflect.get(saved, 'activePanelId')
+      const panelId: unknown = Reflect.get(saved, 'activePanelId')
       if (panelId === null) layout.selectPanel(null)
       else {
         const entry = ctx.slots.entries('main').find(value => value.options.key === panelId)

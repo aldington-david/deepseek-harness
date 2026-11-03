@@ -372,6 +372,7 @@ describe('AppFrame normal width concessions', () => {
   it('keeps the right panel available as an overlay in phone presentation', () => {
     frameWidth = 390
     const { instance, rightOwner, frame } = mountFrame()
+    act(() => { instance.actions.chooseViewMode('mobile') })
     expect(rightOwner()).toEqual({ width: 390, viewportWidth: 390, canShow: true })
     act(() => { instance.actions.openRightbar(true, false) })
     expect(tracks(frame)).toEqual([56, 0])
@@ -676,6 +677,22 @@ describe('AppFrame pointer resizing', () => {
 })
 
 describe('AppFrame frame measurement lifecycle', () => {
+  it('keeps native Auto on desktop at narrow widths and applies an explicit Phone choice without remounting main content', () => {
+    const { instance, frame, getByTestId, rightOwner } = mountFrame()
+    const main = getByTestId('main-content')
+    resize(390)
+    expect(frame.dataset.phone).toBeUndefined()
+    expect(rightOwner().canShow).toBe(false)
+    act(() => { instance.actions.chooseViewMode('mobile') })
+    expect(frame.dataset.phone).toBe('true')
+    expect(rightOwner().width).toBe(390)
+    expect(getByTestId('main-content')).toBe(main)
+    act(() => { instance.actions.chooseViewMode('auto') })
+    expect(frame.dataset.phone).toBeUndefined()
+    expect(rightOwner().canShow).toBe(false)
+    expect(getByTestId('main-content')).toBe(main)
+  })
+
   it('coalesces observer reports and publishes the latest frame measurement', () => {
     const { instance, rightOwner } = mountFrame()
     const observer = observers.at(-1)!

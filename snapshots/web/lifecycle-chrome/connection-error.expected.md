@@ -1,2 +1,3 @@
+- button "Interface layout": Interface layout Auto
 - button "Account menu": More
 - button "Reconnecting, reconnect now": Reconnecting

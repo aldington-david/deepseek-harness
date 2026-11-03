@@ -13,6 +13,7 @@
 - tree "会话":
   - treeitem "workspace" [expanded]
   - treeitem "新会话" [selected]
+- button "界面布局": 界面布局 自动
 - button "账号菜单": 更多
 - banner:
   - button "打开右侧边栏"

@@ -49,7 +49,8 @@ function record(value: unknown): value is Record<string, unknown> {
  */
 export function phonePresentation(view: ViewPresentation, width: number): boolean {
   const mode = view.preferences[view.scope]
-  return mode === 'mobile' || (mode === 'auto' && (view.scope === 'inline' || view.platform === 'mobile' || width <= 780))
+  return mode === 'mobile' || (mode === 'auto' && view.scope !== 'native'
+    && (view.scope === 'inline' || view.platform === 'mobile' || width <= 780))
 }
 /**
  * Create independent automatic choices for each browser position.
@@ -130,6 +131,14 @@ type LayoutInstance = ReturnType<ReturnType<typeof createLayoutStore>['create']>
 type HostRequestId = Branded<'web-host-request-id'>
 type PendingHostRequest = { resolve: () => void; reject: (error: Error) => void }
 
+/** Validate export bytes before they cross into the embedding host. */
+function isWebDownload(file: unknown): file is WebDownload {
+  if (!record(file) || typeof file.name !== 'string' || !file.name || /[\\/\u0000-\u001f\u007f]/.test(file.name)) return false
+  if (file.mimeType === 'application/json') return typeof file.text === 'string' && !Object.hasOwn(file, 'blob')
+  return file.mimeType === 'application/octet-stream' && typeof file.blob === 'string' && !Object.hasOwn(file, 'text')
+    && file.blob.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(file.blob)
+}
+
 /** Owns one frame's trusted message listener and private view snapshots. */
 export class WebViewController implements WebView {
   private readonly origin: string | undefined
@@ -197,16 +206,11 @@ export class WebViewController implements WebView {
 
   /** @param file - Complete JSON or base64 export. @returns The host operation result. */
   downloadFile = async (file: WebDownload): Promise<void> => {
-    if (!file || typeof file.name !== 'string' || !file.name || /[\\/\u0000-\u001f\u007f]/.test(file.name)) {
-      throw new Error(this.text('invalidFile'))
-    }
+    if (!isWebDownload(file)) throw new Error(this.text('invalidFile'))
     if (file.mimeType === 'application/json') {
-      if (typeof file.text !== 'string' || Object.hasOwn(file, 'blob')) throw new Error(this.text('invalidFile'))
       await this.requestHost('download-file', { name: file.name, text: file.text, mimeType: file.mimeType })
       return
     }
-    if (file.mimeType !== 'application/octet-stream' || typeof file.blob !== 'string' || Object.hasOwn(file, 'text')
-      || file.blob.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.blob)) throw new Error(this.text('invalidFile'))
     await this.requestHost('download-file', { name: file.name, blob: file.blob, mimeType: file.mimeType })
   }
 
