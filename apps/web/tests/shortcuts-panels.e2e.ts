@@ -281,6 +281,7 @@ describe.skipIf(process.platform === 'win32')('Web sidebar shortcuts', () => {
       await page.getByRole('button', { name: 'Open right sidebar', exact: true }).click()
       await panel.getByRole('button', { name: 'Fullscreen', exact: true }).click()
       await panel.locator('[data-dockkit-split-button]').click()
+      await page.mouse.move(10, 10)
       await expect.poll(() => panel.locator('[data-dockkit-pane]').count()).toBe(2)
       await (closeFirst === 'left' ? left : right).getByRole('tab').focus()
       await page.keyboard.press(`${primary}+Shift+,`)
