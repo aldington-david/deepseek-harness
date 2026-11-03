@@ -744,6 +744,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Host `ctx.connection` members consumed by transport-independent adapters.',
     methods: [
       {
+        signature: 'readonly frameAncestors?: readonly string[]',
+        description: 'Additional exact origins explicitly allowed to embed Host-served HTML.',
+        parameters: [],
+      },
+      {
         signature: 'readonly rpc: HostConnectionRpc',
         description: 'Generic RPC channel registry.',
         parameters: [],
@@ -770,13 +775,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Fetch handler for trusted, authenticated requests.',
       },
       {
-        signature: 'requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection',
+        signature: 'requestRejection(request: ConnectionTrustRequest): Promise<ConnectionRequestRejection>',
         description: 'Apply Connection\'s Host/Origin checks and browser authentication to another Web route.',
         parameters: [{ name: 'request', description: 'request headers from the HTTP or upgrade request.' }],
         returns: 'rejection status, or undefined when the route may accept the request.',
       },
       {
-        signature: 'admit(request: ConnectionTrustRequest): PeerAdmission',
+        signature: 'admit(request: ConnectionTrustRequest): Promise<PeerAdmission>',
         description: 'Admit an HTTP request against its signed browser or API credential and live Peer.',
         parameters: [{ name: 'request', description: 'request headers from the HTTP or upgrade request.' }],
         returns: 'the credential\'s Peer, or the rejection status.',
@@ -788,13 +793,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a new Peer distinct from every other Peer.',
       },
       {
-        signature: 'admitConnection(request: ConnectionTrustRequest): ConnectionAdmission',
+        signature: 'admitConnection(request: ConnectionTrustRequest): Promise<ConnectionAdmission>',
         description: 'Claim a physical socket for an API Peer; browser sockets share their owner Peer.',
         parameters: [{ name: 'request', description: 'authenticated upgrade request headers.' }],
         returns: 'the Peer and idempotent release, or 409 for duplicate API ownership. The carrier releases on socket termination or failed upgrade; release removes API admission synchronously without cancelling independent HTTP calls.',
       },
       {
-        signature: 'authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean',
+        signature: 'authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean>',
         description: 'Authenticate one frontend index request, owning a token redirect or 401. The cookie this mints is `Secure` when the mounted Web carrier serves TLS, which only that listener\'s protocol decides.',
         parameters: [{ name: 'request', description: 'root or configured-index HTTP request.' }, { name: 'response', description: 'response owned when the result is false.' }],
         returns: 'true only when the frontend may serve index.html.',
@@ -4194,6 +4199,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'Recover a failed summary request by synchronously recording a durable change to its selected input.',
     description: 'Recover a failed summary request by synchronously recording a durable change to its selected input. Return true only after making progress; the provider re-derives and re-prices the selection before retrying. Call next() when the failure cannot be recovered. Decisions survive a later summary failure or cancellation.',
     parameters: [{ name: 'payload', description: '.signal - optional compaction cancellation signal.' }, { name: 'next', description: 'delegate to the next recovery listener.' }],
+  },
+  {
+    name: 'connection/authenticate',
+    mode: 'waterfall',
+    signature: '\'connection/authenticate\'(request: import(\'./rpc.ts\').ConnectionTrustRequest, next: () => Promise<boolean | undefined>): Promise<boolean | undefined>',
+    summary: 'Authenticate a declared external Web origin before native browser sessions.',
+    description: 'Authenticate a declared external Web origin before native browser sessions. Delegate with next() for origins this authenticator does not own.',
+    parameters: [{ name: 'request', description: 'HTTP or WebSocket upgrade request facts.' }, { name: 'next', description: 'Delegate to the next authenticator.' }],
   },
   {
     name: 'connection/request',

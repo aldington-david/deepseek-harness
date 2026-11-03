@@ -1,7 +1,8 @@
 /** Recorded npm evidence stays intact while authored files and exact edits remain checked. */
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { exactEditState, isRescopeExcluded } from './rescope-vendor.ts'
+import { exactEditState, isRescopeExcluded, rewriteRescopeSource, unmappedPackageImports } from './rescope-vendor.ts'
 
 const ANCHOR = '\n## Sync procedure'
 const INSERTED = `\n15. **rescope**: one log entry.\n${ANCHOR}`
@@ -9,6 +10,10 @@ const INSERTED = `\n15. **rescope**: one log entry.\n${ANCHOR}`
 describe('rescope file selection', () => {
   it('preserves the recorded npm resolution', () => {
     expect(isRescopeExcluded('scripts/dependency-catalog/package-lock.json')).toBe(true)
+  })
+
+  it('preserves the mapping regression fixtures in either rename direction', () => {
+    expect(isRescopeExcluded('scripts/rescope-vendor.spec.ts')).toBe(true)
   })
 
   it.each([
@@ -19,6 +24,92 @@ describe('rescope file selection', () => {
     'packages/example/package.json',
   ])('keeps %s subject to upstream package-name checks', (file) => {
     expect(isRescopeExcluded(file)).toBe(false)
+  })
+})
+
+describe('product identifiers', () => {
+  it.each([
+    'apps/cli/tests/optional-bundle-transitions.e2e.ts',
+    'apps/web/tests/agent-preset-selection.e2e.ts',
+    'apps/web/tests/developer-tools-settings.e2e.ts',
+    'docs/subsystems/schedule.md',
+    'docs/subsystems/schedule.zh.md',
+    'docs/upgrade-guide/v0.2.0-rc.2/schedule-bundle-retired/guide.md',
+    'docs/upgrade-guide/v0.2.0-rc.2/schedule-bundle-retired/guide.zh.md',
+    'docs/upgrade-guide/v0.2.1-alpha.1/subagent-preset-composition/guide.md',
+    'docs/upgrade-guide/v0.2.1-alpha.1/subagent-preset-composition/guide.zh.md',
+    'docs/user/guide/schedule.md',
+    'docs/user/guide/schedule.zh.md',
+    'packages/bundle/web-app/cordis.patch.yml',
+    'packages/client/ui-agent-preset/src/client/CreatePluginMenuItem.tsx',
+    'packages/client/ui-agent-preset/src/client/analytics.ts',
+    'packages/client/ui-agent-preset/tests/analytics.client.spec.ts',
+    'packages/client/ui-agent-preset/tests/components.client.spec.tsx',
+    'packages/client/ui-agent-preset/tests/create-plugin-menu-item.client.spec.tsx',
+    'packages/client/ui-agent-preset/tests/section-store.client.spec.ts',
+    'packages/client/ui-conversation/src/client/input/submission-analytics.ts',
+    'packages/client/ui-conversation/tests/service-orchestration.client.spec.ts',
+    'packages/client/ui-entry-customization/src/client/index.ts',
+    'packages/client/ui-entry-customization/tests/menu.client.spec.tsx',
+    'packages/client/ui-workspace/tests/workspaces-service.client.spec.ts',
+    'packages/extensions/cordis-host-runner/tests/inspect-registry.spec.ts',
+    'snapshots/session/cordis-inspect-liveness/client-fixture.mjs',
+    'snapshots/session/cordis-inspect-timeout/client-fixture.mjs',
+  ])('preserves preset and event identifiers in %s', (file) => {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
+    expect(rewriteRescopeSource(text, file)).toEqual({ text, lines: 0 })
+    expect(unmappedPackageImports(text, file)).toEqual([])
+  })
+
+  it.each([
+    'import type { Context as LegacyContext } from "cordis"',
+    "import type { Context as LegacyContext } from 'cordis'",
+    'export type { Context } from "cordis"',
+    'type LegacyContext = import("cordis").Context',
+    'import LegacyContext = require("cordis")',
+    'const legacy = require("cordis")',
+    'const legacy = import("cordis")',
+    'declare module "cordis" {}',
+    '/** @type {import("cordis").Context} */ let legacy;',
+    '/** @import { Context } from "cordis" */ const legacy = {};',
+  ])('does not hide an added package reference: %s', (extra) => {
+    const file = 'packages/client/ui-conversation/src/client/input/submission-analytics.ts'
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8') + '\n' + extra
+    expect(unmappedPackageImports(text, file)).toEqual(['cordis'])
+  })
+
+  it('keeps package imports checked inside an exempt Markdown fence', () => {
+    const file = 'docs/subsystems/schedule.md'
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
+    const added = text + '\n```ts\nimport { Context } from "cordis"\n```\n'
+    expect(unmappedPackageImports(added, file)).toEqual(['cordis'])
+    expect(rewriteRescopeSource(text, file)).toEqual({ text, lines: 0 })
+  })
+
+  it('accepts the exact import migration before checking either rename direction', () => {
+    const file = 'packages/client/ui-conversation/src/client/input/submission-analytics.ts'
+    const upstream = "import type { Context } from 'cordis'\nconst preset = 'cordis'\n"
+    const find = "from 'cordis'"
+    const replace = "from '@deepseek-ai/cordis'"
+    const scoped = upstream.replace(find, replace)
+    expect(exactEditState(upstream, find, replace, 1)).toBe('pending')
+    expect(unmappedPackageImports(scoped, file)).toEqual([])
+    expect(exactEditState(scoped, replace, find, 1)).toBe('pending')
+    expect(unmappedPackageImports(scoped.replace(replace, find), file, true)).toEqual([])
+    expect(rewriteRescopeSource(scoped, file)).toEqual({ text: scoped, lines: 0 })
+  })
+
+  it('continues to rescope real package imports outside the exceptions', () => {
+    expect(rewriteRescopeSource("import { Context } from 'cordis'\n", 'packages/example/src/index.ts')).toEqual({
+      text: "import { Context } from '@deepseek-ai/cordis'\n", lines: 1,
+    })
+  })
+
+  it('keeps other package names checked inside a preset-id exception', () => {
+    const text = "import Schema from 'schemastery'\nconst preset = 'cordis'\n"
+    expect(rewriteRescopeSource(text, 'packages/client/ui-conversation/src/client/input/submission-analytics.ts')).toEqual({
+      text: "import Schema from '@deepseek-ai/schemastery'\nconst preset = 'cordis'\n", lines: 1,
+    })
   })
 })
 

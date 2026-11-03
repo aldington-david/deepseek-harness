@@ -8,6 +8,9 @@ import { WorkerModuleLoader } from '../../src/module-system/module-loader.ts'
 import { createNodeBuiltins } from '../../src/node/builtins.ts'
 import { MemoryVfs } from '../../src/storage/memory.ts'
 import { setActiveVfs } from '../../src/storage/active.ts'
+import { AsyncLocalStorage, alsCausality, runAtAsyncContextRoot } from '../../src/node/builtin_modules/implemented/async_hooks.ts'
+import { installAsyncContextHooks } from '../../src/polyfill/async-context/async-context-hooks.ts'
+import { installTimerGlobals } from '../../src/node/globals/timers.ts'
 
 const ROOT = '/dsh/workspace/skills'
 let vfs: MemoryVfs
@@ -60,13 +63,17 @@ function mountPackage(name: string, directory: string, files: readonly string[])
 }
 
 /** Load one consumer's exact Chokidar and readdirp versions through the Worker loader. */
-function loadChokidar(fixture: ChokidarFixture): typeof import('chokidar') {
+function loadChokidar(fixture: ChokidarFixture, causality?: typeof alsCausality): typeof import('chokidar') {
   const consumerManifest = join(process.cwd(), fixture.consumerManifest)
   const chokidarEntry = createRequire(consumerManifest).resolve('chokidar')
   const readdirpEntry = createRequire(chokidarEntry).resolve('readdirp')
   mountPackage('chokidar', packageRoot('chokidar', chokidarEntry), fixture.chokidarFiles)
   mountPackage('readdirp', packageRoot('readdirp', readdirpEntry), fixture.readdirpFiles)
-  const loader = new WorkerModuleLoader({ vfs, staticModules: createNodeBuiltins() })
+  const loader = new WorkerModuleLoader({
+    vfs,
+    staticModules: createNodeBuiltins(),
+    ...(causality === undefined ? {} : { alsCausality: causality }),
+  })
   return loader.createRequire('/dsh/')('chokidar') as typeof import('chokidar')
 }
 
@@ -83,7 +90,7 @@ afterEach(async () => {
     vi.clearAllTimers()
     vi.useRealTimers()
   }
-  await Promise.all(closing)
+  try { await Promise.all(closing) } finally { vi.unstubAllGlobals() }
 })
 
 /** Await one emitter event while rejecting hangs deterministically. */
@@ -225,4 +232,49 @@ describe.each(CHOKIDAR_FIXTURES)('$label running unchanged', (fixture) => {
     await Promise.resolve()
     expect(events).toEqual([])
   })
+})
+
+it('keeps a stabilized config change outside an interleaved transaction after lowered stat awaits', async () => {
+  const nativeTimeout = globalThis.setTimeout
+  const nativeInterval = globalThis.setInterval
+  // Keep real clocks, but give the Worker wrappers the browser's numeric timer handles.
+  vi.stubGlobal('setTimeout', (callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) =>
+    Number(nativeTimeout(callback, ms, ...args)))
+  vi.stubGlobal('setInterval', (callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) =>
+    Number(nativeInterval(callback, ms, ...args)))
+  vi.stubGlobal('clearTimeout', globalThis.clearTimeout)
+  vi.stubGlobal('clearInterval', globalThis.clearInterval)
+  vi.stubGlobal('setImmediate', globalThis.setImmediate)
+  vi.stubGlobal('clearImmediate', globalThis.clearImmediate)
+  installAsyncContextHooks()
+  installTimerGlobals()
+  chokidar = loadChokidar({
+    label: 'Chokidar from HMR',
+    consumerManifest: 'packages/boot/hmr/package.json',
+    chokidarFiles: ['package.json', 'index.js', 'handler.js'],
+    readdirpFiles: ['package.json', 'index.js'],
+  }, alsCausality)
+  const als = new AsyncLocalStorage<string>()
+  const path = `${ROOT}/package.json`
+  vfs.writeFileSync(path, '{}')
+  const watcher = runAtAsyncContextRoot(() => watchPath(path, {
+    awaitWriteFinish: { stabilityThreshold: 30, pollInterval: 5 },
+  }))
+  await onceEvent(watcher, 'ready')
+  let seen: string | undefined = 'unobserved'
+  watcher.on('change', () => { seen = als.getStore() })
+  const changed = onceEvent<string>(watcher, 'change')
+  vfs.writeFileSync(path, '{"changed":true}')
+  // The lowered stat await resumes before the next timer turn; its stability poll remains pending.
+  await delay(0)
+  const release = Promise.withResolvers<undefined>()
+  const competing = als.run('transaction', async () => { await release.promise })
+  try {
+    await expect(changed).resolves.toBe(path)
+    expect(seen).toBeUndefined()
+  } finally {
+    release.resolve(undefined)
+    await competing
+    als.disable()
+  }
 })

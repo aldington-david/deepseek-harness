@@ -60,11 +60,12 @@ export interface ClientDeclarations {
  * Collect bare packages referenced by one production source file.
  * @param path - File path used to select TypeScript's parser mode.
  * @param source - Source text to inspect.
+ * @param includeJsDoc - Include JSDoc import types and import tags; omission keeps source-code imports only.
  * @returns Bare package names referenced by imports, declarations, or JSX.
  */
-export function collectSourcePackageUses(path: string, source: string): Set<string> {
+export function collectSourcePackageUses(path: string, source: string, includeJsDoc = false): Set<string> {
   const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
-  return collectSourceFileUses(sourceFile, false, 'package')
+  return collectSourceFileUses(sourceFile, false, 'package', false, includeJsDoc)
 }
 
 /**
@@ -136,6 +137,7 @@ function collectSourceFileUses(
   runtimeOnly: boolean,
   key: 'local' | 'package' | 'specifier',
   includeRootRelative = false,
+  includeJsDoc = false,
 ): Set<string> {
   const uses = new Set<string>()
 
@@ -148,7 +150,7 @@ function collectSourceFileUses(
     if (!isBareSpecifier(specifier.text)) return
     uses.add(key === 'package' ? packageNameOf(specifier.text) : specifier.text)
   }
-  const visit = (node: ts.Node): void => {
+  const visit = (node: ts.Node, attachedJsDoc = true): void => {
     if (ts.isImportDeclaration(node)) {
       if (!runtimeOnly || importCarriesRuntimeValue(node)) add(node.moduleSpecifier)
     } else if (ts.isExportDeclaration(node)) {
@@ -157,6 +159,8 @@ function collectSourceFileUses(
       if (!runtimeOnly || !node.isTypeOnly) add(node.moduleReference.expression)
     } else if (!runtimeOnly && ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
       add(node.argument.literal)
+    } else if (includeJsDoc && ts.isJSDocImportTag(node)) {
+      add(node.moduleSpecifier)
     } else if (ts.isCallExpression(node)
       && (node.expression.kind === ts.SyntaxKind.ImportKeyword
         || ts.isIdentifier(node.expression) && node.expression.text === 'require')) {
@@ -167,7 +171,10 @@ function collectSourceFileUses(
       && (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node))) {
       uses.add('react')
     }
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, (child) => { visit(child, attachedJsDoc) })
+    if (includeJsDoc && attachedJsDoc) {
+      for (const doc of ts.getJSDocCommentsAndTags(node)) visit(doc, false)
+    }
   }
 
   visit(sourceFile)

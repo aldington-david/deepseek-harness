@@ -67,11 +67,13 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
  * @param authorizeIndex - authenticates an index response before its bytes are read.
  * @param renderIndex - produces the index.html body (structured injection
  * rendering) for the dist root and configured index path.
+ * @param frameAncestors - additional exact origins allowed to embed index HTML.
  */
 export async function serveStatic(
   pathname: string, res: ServerResponse, distRoot: string, distIndex: string,
-  authorizeIndex: () => boolean,
+  authorizeIndex: () => boolean | Promise<boolean>,
   renderIndex: () => Promise<string>,
+  frameAncestors: readonly string[] = [],
 ): Promise<void> {
   const target = resolve(normalize(join(distRoot, pathname)))
   // Traversal rejection: the target must be distRoot itself (`/`) or stay under
@@ -86,7 +88,8 @@ export async function serveStatic(
   let type: string
   try {
     if (target === distRoot || target === distIndex) {
-      if (!authorizeIndex()) return
+      if (!await authorizeIndex()) return
+      if (frameAncestors.length > 0) res.setHeader('content-security-policy', `frame-ancestors 'self' ${frameAncestors.join(' ')}`)
       body = await renderIndex()
       type = HTML_MIME
     } else {
@@ -135,6 +138,7 @@ export function apply(ctx: Context, config: Config): void {
       distIndex,
       () => ctx.connection.authorizeIndex(req, res),
       renderIndex,
+      ctx.connection.frameAncestors,
     )
   }), 'frontend-static: fallback seat')
 }

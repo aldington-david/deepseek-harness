@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import type { SpawnOptions } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -151,7 +152,7 @@ function launch(
   const systemctlQuery = inspect === undefined ? undefined : async (command: string, args: readonly string[]) => {
     if (args[1] !== 'kill' && args[1] !== 'stop') return inspect(command, args)
     const reply = runSync(command, args, { encoding: 'utf8' })
-    return { ...reply, stdout: String(reply.stdout ?? ''), stderr: String(reply.stderr ?? '') }
+    return { ...reply, stdout: reply.stdout ?? '', stderr: reply.stderr ?? '' }
   }
   const result = launchLinuxScope(request, { TARGET: 'yes' }, ['--expand-environment=no'], {
     spawn: overrides.spawn ?? spawn as never,
@@ -452,9 +453,12 @@ describe('Linux scope establishment and quiescence', () => {
     const child = new FakeChild(), killed = Promise.withResolvers<ReturnType<typeof missingUnit>>()
     let requestPath: string | undefined
     const result = launchLinuxScope(spec(), {}, ['--expand-environment=no'], {
-      spawn: vi.fn((_command, _args, options) => { requestPath = options.env?.[SUBPROCESS_RUNNER_ENV]; return child }) as never,
+      spawn: vi.fn((_command: string, _args: readonly string[], options: SpawnOptions) => {
+        requestPath = options.env?.[SUBPROCESS_RUNNER_ENV]
+        return child
+      }) as never,
       runnerInvocation: ['/usr/bin/node', '/runner.js'],
-      spawnSync: vi.fn(() => { throw new Error('normal termination must not call spawnSync') }) as never,
+      spawnSync: vi.fn(() => { throw new Error('normal termination must not call spawnSync') }),
       systemctlQuery: async (_command, args) => args[1] === 'kill' ? killed.promise : activeUnit('inactive'),
     })
     if (requestPath === undefined) throw new Error('missing request path')

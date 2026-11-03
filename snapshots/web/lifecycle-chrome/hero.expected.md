@@ -13,6 +13,7 @@
 - tree "Sessions":
   - treeitem "workspace" [expanded]
   - treeitem "New Session" [selected]
+- button "Interface layout": Interface layout Auto
 - button "Account menu": More
 - banner:
   - button "Open right sidebar"

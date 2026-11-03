@@ -66,10 +66,29 @@ async function boot(platform: ShortcutPlatform = 'macos', runtime: 'desktop' | '
   ctx.provide('locale', locale as never)
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
-  return { tabs, registered, dictionaries, fiber, openTabs, registry, sidebar, target }
+  return { ctx, tabs, registered, dictionaries, fiber, openTabs, registry, sidebar, target }
 }
 
 describe('ui-sidebar-browser apply', () => {
+  it('routes the external command through the embedded host and leaves ordinary Web opening unchanged', async () => {
+    const h = await boot('linux', 'web')
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const openLink = vi.fn(async () => {})
+    let embedded = true
+    h.ctx.provide('layout', { webView: { getSnapshot: () => ({ embedded }), openLink } } as never)
+    try {
+      const injectFace = h.registered.find(entry => entry.name === 'sidebar.right.pane.tab')!.inject as
+        (sessionId: string, actions: Parameters<BrowserInjected['rebind']>[0]) => BrowserInjected
+      const controller = injectFace('session', createBrowserStore().create('external-host-test').actions)
+      controller.openExternalLink?.('https://example.test/host')
+      expect(openLink).toHaveBeenCalledWith('https://example.test/host')
+      expect(open).not.toHaveBeenCalled()
+      embedded = false
+      controller.openExternalLink?.('https://example.test/native')
+      expect(open).toHaveBeenCalledWith('https://example.test/native', '_blank', 'noopener,noreferrer')
+    } finally { open.mockRestore() }
+  })
+
   it.each([0, 1])('binds and rebinds session controllers under desktop protocol %s', async (protocolVersion) => {
     const acquire = vi.fn(async () => ({ lease: 'test-lease' as DesktopBrowserLeaseId, partition: 'test-partition' }))
     const bridge: DesktopBrowserBridge = {

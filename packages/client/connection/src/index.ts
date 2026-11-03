@@ -61,6 +61,14 @@ export const name = 'client-connection'
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /**
+     * Authenticate a declared external Web origin before native browser sessions.
+     * Delegate with next() for origins this authenticator does not own.
+     * @param request - HTTP or WebSocket upgrade request facts.
+     * @param next - Delegate to the next authenticator.
+     * @mode waterfall
+     */
+    'connection/authenticate'(request: import('./rpc.ts').ConnectionTrustRequest, next: () => Promise<boolean | undefined>): Promise<boolean | undefined>
+    /**
      * Admit or wrap an authenticated shared API request, including body transfer.
      * Existing requests continue when a listener refuses subsequent requests.
      * @param request - Authenticated incoming HTTP request.
@@ -103,6 +111,8 @@ export interface ConnectionConfig {
    * an entry here. A non-canonical or non-bare authority fails plugin load.
    */
   trustedHosts?: string[]
+  /** Additional exact HTTP(S) origins allowed to embed the Web interface. */
+  frameAncestors?: string[]
   /** Absolute browser and API cookie lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -112,6 +122,7 @@ export interface ConnectionConfig {
 export const Config: z<ConnectionConfig> = z.object({
   recovery: ConnectionRecoveryConfigSchema.default({}),
   trustedHosts: z.array(String).default([]),
+  frameAncestors: z.array(String).default([]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
 })
@@ -127,16 +138,24 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   const recovery = resolveConnectionConfig(config?.recovery)
   // The Loader resolves schema defaults; hand-built test contexts may pass none.
   const trustedHosts = config?.trustedHosts ?? []
+  const frameAncestors = config?.frameAncestors ?? []
   const cookieMaxAgeDays = config?.cookieMaxAgeDays ?? 30
   const maxRequestBodyBytes = config?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
   // Config boundary: a malformed entry fails the load loudly here rather than
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
+  for (const entry of frameAncestors) {
+    const origin = new URL(entry)
+    if (!['https:', 'http:'].includes(origin.protocol) || origin.origin !== entry || origin.hostname.includes('*')) {
+      throw new Error('client-connection: frameAncestors must contain exact HTTP(S) origins')
+    }
+  }
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
     await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    frameAncestors,
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
@@ -148,7 +167,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       kind: 'prefix',
       path: API_PATH,
       handler: async (req, res) => {
-        const admission = connection.admit(req)
+        const admission = await connection.admit(req)
         if ('rejection' in admission) {
           res.writeHead(admission.rejection)
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')

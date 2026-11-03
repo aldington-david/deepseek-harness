@@ -61,7 +61,7 @@ async function bench(initialSettings?: ChatSettings, withBrowserRegistry = true,
     get: (id: string) => id === CHAT_SETTINGS_NAMESPACE ? chatSettings.scope : stubConfigForm().scope,
   } as never)
   const layout = { closeRightbar: vi.fn(), openRightbar: vi.fn() }
-  runtime.ctx.provide('layout', layout as never)
+  await runtime.mount({ apply: (ctx) => { ctx.provide('layout', layout as never) } })
   const sidebarRight = {
     openResource: vi.fn<(address: string) => void>(),
     openTab: vi.fn<(kind: string, options?: unknown) => void>(),
@@ -281,6 +281,27 @@ describe('Chat inject API', () => {
       injected.openExternalLink('https://example.test/path')
       expect(b.sidebarRight.openTab).not.toHaveBeenCalled()
       expect(open).toHaveBeenCalledWith('https://example.test/path', '_blank', 'noopener,noreferrer')
+    } finally {
+      open.mockRestore()
+      await b.runtime.dispose()
+    }
+  })
+
+  it('uses the trusted host for external message links only while the original frame is embedded', async () => {
+    const b = await bench()
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const openLink = vi.fn(async () => {})
+    let embedded = true
+    Object.assign(b.layout, { webView: { getSnapshot: () => ({ embedded }), openLink } })
+    try {
+      b.sidebarRightTabs.get.mockReturnValue(undefined)
+      const { injected } = b.chatViewApi(b.rootReference)
+      injected.openExternalLink('https://example.test/host')
+      expect(openLink).toHaveBeenCalledWith('https://example.test/host')
+      expect(open).not.toHaveBeenCalled()
+      embedded = false
+      injected.openExternalLink('https://example.test/native')
+      expect(open).toHaveBeenCalledWith('https://example.test/native', '_blank', 'noopener,noreferrer')
     } finally {
       open.mockRestore()
       await b.runtime.dispose()

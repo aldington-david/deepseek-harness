@@ -124,10 +124,10 @@ async function mounted(
 }
 
 /** Exchange a service's process token for one authority-bound Cookie header. */
-function browserCookie(connection: HostConnectionHandle, authority: string): string {
+async function browserCookie(connection: HostConnectionHandle, authority: string): Promise<string> {
   const url = new URL(connection.authenticatedUrl(`http://${authority}`))
   const exchanged = fakeResponse()
-  connection.authorizeIndex(
+  await connection.authorizeIndex(
     fakeRequest({ host: authority }, `${url.pathname}${url.search}`),
     exchanged.response,
   )
@@ -137,6 +137,101 @@ function browserCookie(connection: HostConnectionHandle, authority: string): str
 }
 
 describe('connection node half', () => {
+  it('refuses wildcard and path-shaped embedding origins before publishing Connection', async () => {
+    for (const frameAncestor of ['https://*.example', 'https://widget.example/path']) {
+      await expect(mounted({ frameAncestors: [frameAncestor] })).rejects.toThrow('exact HTTP(S) origins')
+    }
+  })
+
+  it('awaits an external browser authenticator and withdraws it with its owner', async () => {
+    const { ctx, routes, connection, dispose } = await mounted({ trustedHosts: ['workbench.example'] })
+    const credentialReady = Promise.withResolvers<boolean | undefined>()
+    const authenticator = ctx.plugin({ apply(owner: Context) {
+      owner.on('connection/authenticate', () => credentialReady.promise)
+    } })
+    try {
+      await authenticator.await()
+      connection.fetch.register({ path: '/api/check', methods: ['GET'], requestBody: 'buffered',
+        fetch: async () => new Response('operator response') })
+      const response = fakeResponse()
+      const operation = routes[0]!.handler(fakeRequest({ host: 'workbench.example' }, '/api/check'), response.response)
+      expect(response.state.status).toBeUndefined()
+      credentialReady.resolve(true)
+      await operation
+      expect(response.state.body).toBe('operator response')
+      await authenticator.dispose()
+      const refused = fakeResponse()
+      await routes[0]!.handler(fakeRequest({ host: 'workbench.example' }, '/api/check'), refused.response)
+      expect(refused.state.status).toBe(401)
+    } finally { await authenticator.dispose(); await dispose() }
+  })
+
+  it.each(['api', 'index'] as const)('refuses a late external %s authentication result after Connection disposal', async (kind) => {
+    const { ctx, connection, dispose } = await mounted({ trustedHosts: ['workbench.example'] })
+    const entered = Promise.withResolvers<undefined>()
+    const ready = Promise.withResolvers<boolean | undefined>()
+    const authenticate = vi.fn(() => { entered.resolve(undefined); return ready.promise })
+    const authenticator = ctx.plugin({ apply(owner: Context) {
+      owner.on('connection/authenticate', authenticate)
+    } })
+    await authenticator.await()
+    const request = fakeRequest({ host: 'workbench.example' }, '/')
+    request.method = 'HEAD'
+    const response = fakeResponse()
+    const pending = kind === 'api' ? connection.admit(request) : connection.authorizeIndex(request, response.response)
+    try {
+      await entered.promise
+      await dispose()
+      ready.resolve(true)
+      expect(await pending).toEqual(kind === 'api' ? { rejection: 401 } : false)
+      if (kind === 'index') expect(response.state).toMatchObject({ status: 401 })
+      expect(await connection.admit(request)).toEqual({ rejection: 401 })
+      expect(await connection.authorizeIndex(request, fakeResponse().response)).toBe(false)
+      expect(authenticate).toHaveBeenCalledOnce()
+    } finally { ready.resolve(false); await pending; await authenticator.dispose(); await dispose() }
+  })
+
+  it('refuses an external denial even when the request carries a valid native browser cookie', async () => {
+    const { ctx, connection, dispose } = await mounted({ trustedHosts: ['workbench.example'] })
+    const cookie = await browserCookie(connection, 'workbench.example')
+    const authenticator = ctx.plugin({ apply(owner: Context) {
+      owner.on('connection/authenticate', () => Promise.resolve(false))
+    } })
+    try {
+      await authenticator.await()
+      const request = fakeRequest({ host: 'workbench.example', cookie }, '/')
+      expect(await connection.admit(request)).toEqual({ rejection: 401 })
+      const response = fakeResponse()
+      expect(await connection.authorizeIndex(request, response.response)).toBe(false)
+      expect(response.state).toMatchObject({ status: 401, body: 'dsh web authentication required\n' })
+    } finally { await authenticator.dispose(); await dispose() }
+  })
+
+  it('keeps the receiving listener TLS policy while an authenticator is pending', async () => {
+    const { ctx, connection, dispose } = await mounted(undefined, 'https:')
+    const cookie = await browserCookie(connection, 'localhost')
+    const carrier = ctx.get('webServer') as { protocol: WebServer['protocol'] }
+    const entered = Promise.withResolvers<undefined>()
+    const ready = Promise.withResolvers<boolean | undefined>()
+    const authenticator = ctx.plugin({ apply(owner: Context) {
+      owner.on('connection/authenticate', () => { entered.resolve(undefined); return ready.promise })
+    } })
+    await authenticator.await()
+    const pending = connection.admit(fakeRequest({ host: 'localhost', cookie }))
+    try {
+      await entered.promise
+      carrier.protocol = 'http:'
+      ready.resolve(undefined)
+      expect(await pending).toEqual({ peer: connection.browserPeer })
+    } finally {
+      carrier.protocol = 'https:'
+      ready.resolve(false)
+      await pending
+      await authenticator.dispose()
+      await dispose()
+    }
+  })
+
   it('runs request admission after authentication and removes it with its owning fiber', async () => {
     const { ctx, routes, connection, dispose } = await mounted()
     let admitted = 0
@@ -153,7 +248,7 @@ describe('connection node half', () => {
       await routes[0]!.handler(fakeRequest({ host: 'localhost' }), unauthorized.response)
       expect(unauthorized.state.status).toBe(401)
       expect(admitted).toBe(0)
-      const headers = { host: 'localhost', cookie: browserCookie(connection, 'localhost') }
+      const headers = { host: 'localhost', cookie: await browserCookie(connection, 'localhost') }
       const refused = fakeResponse()
       await routes[0]!.handler(fakeRequest(headers), refused.response)
       expect(refused.state.status).toBe(503)
@@ -185,7 +280,7 @@ describe('connection node half', () => {
       completed = true
     })
     const response = fakeResponse()
-    const pending = routes[0]!.handler(fakeRequest({ host: 'localhost', cookie: browserCookie(connection, 'localhost') }, '/api/held'), response.response)
+    const pending = routes[0]!.handler(fakeRequest({ host: 'localhost', cookie: await browserCookie(connection, 'localhost') }, '/api/held'), response.response)
     try {
       await entered.promise
       expect(completed).toBe(false)
@@ -202,8 +297,8 @@ describe('connection node half', () => {
     try {
       await fiber.await()
       const connection = ctx.get('connection') as HostConnectionHandle
-      const cookie = browserCookie(connection, 'localhost')
-      expect(connection.admit(fakeRequest({ host: 'localhost', cookie }))).toEqual({ peer: connection.browserPeer })
+      const cookie = await browserCookie(connection, 'localhost')
+      expect(await connection.admit(fakeRequest({ host: 'localhost', cookie }))).toEqual({ peer: connection.browserPeer })
     } finally {
       await fiber.dispose()
     }
@@ -224,8 +319,8 @@ describe('connection node half', () => {
       try {
         await web.await()
         await expect.poll(() => routes.find(route => route.path === API_PATH)).toBeDefined()
-        const bound = browserCookie(connection, '10.1.2.3:3080')
-        expect(connection.requestRejection(fakeRequest({ host: '10.1.2.3:3080', cookie: bound }))).toBeUndefined()
+        const bound = await browserCookie(connection, '10.1.2.3:3080')
+        expect(await connection.requestRejection(fakeRequest({ host: '10.1.2.3:3080', cookie: bound }))).toBeUndefined()
       } finally {
         await web.dispose()
       }
@@ -237,9 +332,9 @@ describe('connection node half', () => {
   it('uses the TLS default port for markerless exact-authority grants', async () => {
     const { connection, dispose } = await mounted({ trustedHosts: ['tls.example:443', 'plain.example:80'] }, 'https:')
     try {
-      expect(connection.requestRejection(fakeRequest({ host: 'tls.example' }))).toBe(401)
-      expect(connection.requestRejection(fakeRequest({ host: 'plain.example' }))).toBe(403)
-      expect(connection.requestRejection(fakeRequest({ host: 'tls.example:444' }))).toBe(403)
+      expect(await connection.requestRejection(fakeRequest({ host: 'tls.example' }))).toBe(401)
+      expect(await connection.requestRejection(fakeRequest({ host: 'plain.example' }))).toBe(403)
+      expect(await connection.requestRejection(fakeRequest({ host: 'tls.example:444' }))).toBe(403)
     } finally {
       await dispose()
     }
@@ -251,14 +346,14 @@ describe('connection node half', () => {
       try {
         const url = new URL(connection.authenticatedUrl('http://127.0.0.1:3080'))
         const exchanged = fakeResponse()
-        connection.authorizeIndex(
+        await connection.authorizeIndex(
           fakeRequest({ host: '127.0.0.1:3080', 'x-forwarded-proto': secure ? 'http' : 'https' }, `${url.pathname}${url.search}`),
           exchanged.response,
         )
         const setCookie = exchanged.state.headers?.['set-cookie']
         expect(setCookie?.endsWith('; Secure'), protocol).toBe(secure)
         if (setCookie === undefined) throw new Error('browser token exchange did not set a cookie')
-        expect(connection.requestRejection(fakeRequest({
+        expect(await connection.requestRejection(fakeRequest({
           host: '127.0.0.1:3080',
           cookie: setCookie.split(';', 1)[0]!,
         }))).toBeUndefined()
@@ -375,7 +470,7 @@ describe('connection node half', () => {
       expect([method, denied.state.status, denied.state.body]).toEqual([method, 401, 'unauthorized'])
     }
 
-    const cookie = browserCookie(connection, 'harness.example')
+    const cookie = await browserCookie(connection, 'harness.example')
     for (const method of methods) {
       const allowed = fakeResponse()
       await routes[0]!.handler(
@@ -398,13 +493,13 @@ describe('connection node half', () => {
     const loopback = fakeResponse()
     await routes[0]!.handler(fakeRequest({
       host: '127.0.0.1:3080',
-      cookie: browserCookie(connection, '127.0.0.1:3080'),
+      cookie: await browserCookie(connection, '127.0.0.1:3080'),
     }), loopback.response)
     expect(loopback.state.status).toBe(404)
     const lan = fakeResponse()
     await routes[0]!.handler(fakeRequest({
       host: '192.168.1.5:3080',
-      cookie: browserCookie(connection, '192.168.1.5:3080'),
+      cookie: await browserCookie(connection, '192.168.1.5:3080'),
     }), lan.response)
     expect(lan.state.status).toBe(404)
     // Declared public authority, same-origin browser shape.
@@ -413,7 +508,7 @@ describe('connection node half', () => {
       host: 'harness.example:3080',
       origin: 'http://harness.example:3080',
       'sec-fetch-site': 'same-origin',
-      cookie: browserCookie(connection, 'harness.example:3080'),
+      cookie: await browserCookie(connection, 'harness.example:3080'),
     }), declared.response)
     expect(declared.state.status).toBe(404)
     await dispose()
@@ -424,11 +519,11 @@ describe('connection node half', () => {
     const loopback = fakeRequest({ host: '127.0.0.1:3080' })
     const declared = fakeRequest({ host: 'harness.example' })
 
-    expect(connection.requestRejection(loopback)).toBe(401)
-    expect(connection.requestRejection(declared)).toBe(401)
-    expect(connection.requestRejection(fakeRequest({
+    expect(await connection.requestRejection(loopback)).toBe(401)
+    expect(await connection.requestRejection(declared)).toBe(401)
+    expect(await connection.requestRejection(fakeRequest({
       host: 'harness.example',
-      cookie: browserCookie(connection, 'harness.example'),
+      cookie: await browserCookie(connection, 'harness.example'),
     }))).toBeUndefined()
     await dispose()
   })
@@ -461,7 +556,7 @@ describe('connection node half', () => {
     const result = fakeResponse()
     await route!.handler(fakePost({
       host: '127.0.0.1:3080',
-      cookie: browserCookie(connection, '127.0.0.1:3080'),
+      cookie: await browserCookie(connection, '127.0.0.1:3080'),
     }, '/rpc/goals/create', request), result.response)
     expect(result.state.status).toBe(200)
     expect(JSON.parse(String(result.state.body))).toEqual({
@@ -518,7 +613,7 @@ describe('connection node half', () => {
     }
 
     const claimed = fakeResponse()
-    const loopbackCookie = browserCookie(connection, '127.0.0.1:3080')
+    const loopbackCookie = await browserCookie(connection, '127.0.0.1:3080')
     await route.handler(fakePost({
       host: '127.0.0.1:3080', cookie: loopbackCookie,
     }, '/api/goals/create', request), claimed.response)
@@ -559,7 +654,7 @@ describe('connection node half', () => {
     const declared = fakeResponse()
     await route.handler(fakePost({
       host: 'harness.example',
-      cookie: browserCookie(connection, 'harness.example'),
+      cookie: await browserCookie(connection, 'harness.example'),
     }, '/api/goals/create', request), declared.response)
     expect(declared.state.status).toBe(200)
     await removeAuthenticated()
@@ -577,10 +672,10 @@ describe('connection node half', () => {
         return { ok: true, value: null }
       },
     )
-    expect(connection.admit(fakeRequest({ host: 'other.example' }))).toEqual({ rejection: 403 })
-    expect(connection.admit(fakeRequest({ host: '127.0.0.1:3080' }))).toEqual({ rejection: 401 })
-    const cookie = browserCookie(connection, '127.0.0.1:3080')
-    expect(connection.admit(fakeRequest({ host: '127.0.0.1:3080', cookie }))).toEqual({ peer: connection.browserPeer })
+    expect(await connection.admit(fakeRequest({ host: 'other.example' }))).toEqual({ rejection: 403 })
+    expect(await connection.admit(fakeRequest({ host: '127.0.0.1:3080' }))).toEqual({ rejection: 401 })
+    const cookie = await browserCookie(connection, '127.0.0.1:3080')
+    expect(await connection.admit(fakeRequest({ host: '127.0.0.1:3080', cookie }))).toEqual({ peer: connection.browserPeer })
 
     const route = routes.find(candidate => candidate.path === API_PATH)!
     const request: ClientRequest = {
@@ -623,7 +718,7 @@ describe('connection node half', () => {
     const route = routes.find(candidate => candidate.path === '/rpc')!
     const harnessHeaders = {
       host: 'harness.example',
-      cookie: browserCookie(connection, 'harness.example'),
+      cookie: await browserCookie(connection, 'harness.example'),
     }
 
     const denied = fakeResponse()
@@ -698,11 +793,62 @@ describe('operator-scoped connect', () => {
     return { cookie: response.state.headers?.['set-cookie']?.split(';', 1)[0] ?? '', state: response.state }
   }
 
-  function admitted(connection: HostConnectionHandle, cookie: string): PeerScope {
-    const admission = connection.admit(fakeRequest({ host: 'localhost', cookie }))
+  async function admitted(connection: HostConnectionHandle, cookie: string): Promise<PeerScope> {
+    const admission = await connection.admit(fakeRequest({ host: 'localhost', cookie }))
     if ('rejection' in admission) throw new Error(`operator refused: ${admission.rejection}`)
     return admission.peer
   }
+
+  it('keeps API Peer lifetime and interaction policy when external authentication succeeds', async () => {
+    const host = await mounted()
+    const authenticator = host.ctx.plugin({ apply(owner: Context) {
+      owner.on('connection/authenticate', () => Promise.resolve(true))
+    } })
+    try {
+      await authenticator.await()
+      const api = await connect(host, '&interactions=none')
+      const request = fakeRequest({ host: 'localhost', cookie: api.cookie })
+      const peer = await admitted(host.connection, api.cookie)
+      expect(peer).not.toBe(host.connection.browserPeer)
+      expect(peer.interactions).toBe('none')
+      expect(await host.connection.authorizeIndex(request, fakeResponse().response)).toBe(false)
+      const owner = await host.connection.admitConnection(request)
+      if ('rejection' in owner) throw new Error('API socket was refused')
+      expect(await host.connection.admitConnection(request)).toEqual({ rejection: 409 })
+      const admit = host.connection.admit.bind(host.connection)
+      const closing = vi.spyOn(host.connection, 'admit').mockImplementationOnce(async (request) => {
+        const result = await admit(request)
+        await owner.release()
+        return result
+      })
+      try {
+        expect(await host.connection.admitConnection(request)).toEqual({ rejection: 401 })
+      } finally { closing.mockRestore() }
+      expect(await host.connection.admit(request)).toEqual({ rejection: 401 })
+
+      const expiring = await connect(host, '&interactions=none')
+      const invalid = fakeRequest({ host: 'localhost', cookie: `${expiring.cookie.slice(0, -1)}!` })
+      expect(await host.connection.admit(invalid)).toEqual({ rejection: 401 })
+      const future = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31 * 86_400_000)
+      try {
+        expect(await host.connection.admit(fakeRequest({ host: 'localhost', cookie: expiring.cookie }))).toEqual({ rejection: 401 })
+      } finally { future.mockRestore() }
+    } finally { await authenticator.dispose(); await host.dispose() }
+  })
+
+  it('refuses a browser socket claim when Connection stops after authentication', async () => {
+    const host = await mounted()
+    const cookie = await browserCookie(host.connection, 'localhost')
+    const admit = host.connection.admit.bind(host.connection)
+    const stopping = vi.spyOn(host.connection, 'admit').mockImplementationOnce(async (request) => {
+      const result = await admit(request)
+      await host.dispose()
+      return result
+    })
+    try {
+      expect(await host.connection.admitConnection(fakeRequest({ host: 'localhost', cookie }))).toEqual({ rejection: 401 })
+    } finally { stopping.mockRestore(); await host.dispose() }
+  })
 
   it('defaults API callers to none regardless of Accept and honors explicit declarations', async () => {
     const host = await mounted()
@@ -716,25 +862,25 @@ describe('operator-scoped connect', () => {
       ] as const) {
         const result = await connect(host, query, headers)
         expect(result.state).toMatchObject({ status, headers: { location, 'cache-control': 'no-store' } })
-        expect(admitted(host.connection, result.cookie).interactions).toBe(interactions)
+        expect((await admitted(host.connection, result.cookie)).interactions).toBe(interactions)
       }
-      const rootCookie = browserCookie(host.connection, 'localhost')
-      expect(admitted(host.connection, rootCookie).interactions).toBe('answer')
+      const rootCookie = await browserCookie(host.connection, 'localhost')
+      expect((await admitted(host.connection, rootCookie)).interactions).toBe('answer')
     } finally { await host.dispose() }
   })
 
   it('keeps all browser cookies on the shared operator and creates independent API operators', async () => {
     const host = await mounted()
     try {
-      const cookie = browserCookie(host.connection, 'localhost')
-      expect(admitted(host.connection, cookie)).toBe(host.connection.browserPeer)
-      expect(admitted(host.connection, browserCookie(host.connection, 'localhost'))).toBe(host.connection.browserPeer)
+      const cookie = await browserCookie(host.connection, 'localhost')
+      expect(await admitted(host.connection, cookie)).toBe(host.connection.browserPeer)
+      expect(await admitted(host.connection, await browserCookie(host.connection, 'localhost'))).toBe(host.connection.browserPeer)
       const api = await connect(host, '', { cookie })
-      expect(admitted(host.connection, api.cookie)).not.toBe(host.connection.browserPeer)
+      expect(await admitted(host.connection, api.cookie)).not.toBe(host.connection.browserPeer)
       const second = await connect(host, '', { cookie: api.cookie })
-      expect(admitted(host.connection, second.cookie)).not.toBe(admitted(host.connection, api.cookie))
+      expect(await admitted(host.connection, second.cookie)).not.toBe(await admitted(host.connection, api.cookie))
       const denied = fakeResponse()
-      expect(host.connection.authorizeIndex(fakeRequest(
+      expect(await host.connection.authorizeIndex(fakeRequest(
         { host: 'localhost', cookie: api.cookie }, '/',
       ), denied.response)).toBe(false)
       expect(denied.state.status).toBe(401)
@@ -787,8 +933,8 @@ describe('operator-scoped connect', () => {
     try {
       const first = await connect(host)
       const second = await connect(host)
-      const peer = admitted(host.connection, first.cookie)
-      expect(admitted(host.connection, second.cookie).id).not.toBe(peer.id)
+      const peer = await admitted(host.connection, first.cookie)
+      expect((await admitted(host.connection, second.cookie)).id).not.toBe(peer.id)
       host.connection.rpc.intercept('/api', () => true, async (_endpoint, _payload, signal, caller) => {
         expect(caller).toBe(peer)
         if (_endpoint === 'fixture/held') {
@@ -808,16 +954,16 @@ describe('operator-scoped connect', () => {
       const pendingResponse = fakeResponse()
       const pending = api.handler(post('fixture/held'), pendingResponse.response)
       const signal = await started.promise
-      const owner = host.connection.admitConnection(fakeRequest({ host: 'localhost', cookie: first.cookie }))
+      const owner = await host.connection.admitConnection(fakeRequest({ host: 'localhost', cookie: first.cookie }))
       if ('rejection' in owner) throw new Error('first socket was refused')
       expect(owner.peer).toBe(peer)
-      expect(host.connection.admitConnection(fakeRequest({ host: 'localhost', cookie: first.cookie })))
+      expect(await host.connection.admitConnection(fakeRequest({ host: 'localhost', cookie: first.cookie })))
         .toEqual({ rejection: 409 })
-      expect(admitted(host.connection, first.cookie)).toBe(peer)
+      expect(await admitted(host.connection, first.cookie)).toBe(peer)
       const cleanup = vi.fn()
       peer.ctx.effect(() => cleanup)
       const released = owner.release()
-      expect(host.connection.admit(fakeRequest({ host: 'localhost', cookie: first.cookie }))).toEqual({ rejection: 401 })
+      expect(await host.connection.admit(fakeRequest({ host: 'localhost', cookie: first.cookie }))).toEqual({ rejection: 401 })
       expect(owner.release()).toBe(released)
       await released
       expect(cleanup).toHaveBeenCalledOnce()
@@ -828,7 +974,7 @@ describe('operator-scoped connect', () => {
       const afterSocket = fakeResponse()
       await api.handler(post('fixture/now'), afterSocket.response)
       expect(afterSocket.state.status).toBe(401)
-      expect(host.connection.admitConnection(fakeRequest({ host: 'localhost', cookie: first.cookie })))
+      expect(await host.connection.admitConnection(fakeRequest({ host: 'localhost', cookie: first.cookie })))
         .toEqual({ rejection: 401 })
     } finally { finish.resolve(undefined); await host.dispose() }
   })
@@ -838,13 +984,13 @@ describe('operator-scoped connect', () => {
     vi.useFakeTimers()
     try {
       const { cookie } = await connect(host)
-      const peer = admitted(host.connection, cookie)
+      const peer = await admitted(host.connection, cookie)
       await vi.advanceTimersByTimeAsync(10 * 365 * 86_400_000)
-      expect(admitted(host.connection, cookie)).toBe(peer)
+      expect(await admitted(host.connection, cookie)).toBe(peer)
       const disposed = vi.fn()
       peer.ctx.effect(() => disposed)
       await vi.advanceTimersByTimeAsync(100 * 365 * 86_400_000)
-      expect(host.connection.admit(fakeRequest({ host: 'localhost', cookie }))).toEqual({ rejection: 401 })
+      expect(await host.connection.admit(fakeRequest({ host: 'localhost', cookie }))).toEqual({ rejection: 401 })
       expect(disposed).not.toHaveBeenCalled()
       await host.dispose()
       expect(disposed).toHaveBeenCalledOnce()
@@ -853,31 +999,31 @@ describe('operator-scoped connect', () => {
 
   it('preserves browser tabs and restart recovery without resurrecting API operators', async () => {
     const host = await mounted()
-    const browser = { cookie: browserCookie(host.connection, 'localhost') }
+    const browser = { cookie: await browserCookie(host.connection, 'localhost') }
     const api = await connect(host)
-    const browserPeer = admitted(host.connection, browser.cookie)
+    const browserPeer = await admitted(host.connection, browser.cookie)
     try {
       const request = fakeRequest({ host: 'localhost', cookie: browser.cookie })
-      const one = host.connection.admitConnection(request)
-      const two = host.connection.admitConnection(request)
+      const one = await host.connection.admitConnection(request)
+      const two = await host.connection.admitConnection(request)
       if ('rejection' in one || 'rejection' in two) throw new Error('browser tab was refused')
       expect(two.peer).toBe(one.peer)
       await one.release()
-      expect(admitted(host.connection, browser.cookie)).toBe(browserPeer)
+      expect(await admitted(host.connection, browser.cookie)).toBe(browserPeer)
       await two.release()
-      expect(admitted(host.connection, browser.cookie)).toBe(browserPeer)
+      expect(await admitted(host.connection, browser.cookie)).toBe(browserPeer)
       const refresh = fakeResponse()
-      expect(host.connection.authorizeIndex(fakeRequest({ host: 'localhost', cookie: browser.cookie }, '/'), refresh.response)).toBe(true)
+      expect(await host.connection.authorizeIndex(fakeRequest({ host: 'localhost', cookie: browser.cookie }, '/'), refresh.response)).toBe(true)
       const cleanup = vi.fn()
       browserPeer.ctx.effect(() => cleanup)
       await host.dispose()
       expect(cleanup).toHaveBeenCalledOnce()
-      expect(host.connection.admit(request)).toEqual({ rejection: 401 })
+      expect(await host.connection.admit(request)).toEqual({ rejection: 401 })
       const restarted = await mounted(undefined, 'http:', host.ctx.credentials)
       try {
-        expect(admitted(restarted.connection, browser.cookie)).toBe(restarted.connection.browserPeer)
-        expect(admitted(restarted.connection, browser.cookie)).not.toBe(browserPeer)
-        expect(restarted.connection.admit(fakeRequest({ host: 'localhost', cookie: api.cookie }))).toEqual({ rejection: 401 })
+        expect(await admitted(restarted.connection, browser.cookie)).toBe(restarted.connection.browserPeer)
+        expect(await admitted(restarted.connection, browser.cookie)).not.toBe(browserPeer)
+        expect(await restarted.connection.admit(fakeRequest({ host: 'localhost', cookie: api.cookie }))).toEqual({ rejection: 401 })
       } finally { await restarted.dispose() }
     } finally { await host.dispose() }
   })
@@ -942,7 +1088,7 @@ describe('connection node half over a real HTTP server', () => {
       }
       expect(await call(port, 'settings/openSettingsDocument', 'other.example')).toBe(403)
 
-      const declaredCookie = browserCookie(connection, 'harness.example')
+      const declaredCookie = await browserCookie(connection, 'harness.example')
       for (const method of methods) {
         expect([method, await call(port, method, 'harness.example', declaredCookie)]).toEqual([method, 404])
       }
@@ -951,7 +1097,7 @@ describe('connection node half over a real HTTP server', () => {
         port,
         'settings/openSettingsDocument',
         loopbackAuthority,
-        browserCookie(connection, loopbackAuthority),
+        await browserCookie(connection, loopbackAuthority),
       )).toBe(404)
     } finally {
       await close()

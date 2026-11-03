@@ -83,11 +83,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
    * @param browserAuth - process token and persistent browser-session owner.
+   * @param frameAncestors - exact additional origins permitted to embed Host HTML.
    */
   constructor(
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    readonly frameAncestors: readonly string[] = [],
   ) {
     super(ctx, 'connection')
     this.owner = ctx
@@ -120,16 +122,20 @@ export class HostConnectionService extends Service implements HostConnectionHand
   }
 
   /** Apply the Host/Origin fence and require an authenticated live Peer. */
-  requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
-    const admission = this.admit(request)
+  async requestRejection(request: ConnectionTrustRequest): Promise<ConnectionRequestRejection> {
+    const admission = await this.admit(request)
     return 'rejection' in admission ? admission.rejection : undefined
   }
 
   /** Browser requests share an owner Peer; API HTTP does not depend on an attached socket. */
-  admit(request: ConnectionTrustRequest): PeerAdmission {
+  async admit(request: ConnectionTrustRequest): Promise<PeerAdmission> {
     if (!this.isTrusted(request)) return { rejection: 403 }
     if (this.disposed) return { rejection: 401 }
     const secure = this.owner.get('webServer')?.protocol === 'https:'
+    const external = await this.owner.waterfall('connection/authenticate', request, () => Promise.resolve(undefined))
+    if (this.isDisposed()) return { rejection: 401 }
+    if (external === false) return { rejection: 401 }
+    if (external === true && !this.browserAuth.hasApiCookie(request, secure)) return { peer: this.browserPeer }
     if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
     const id = this.browserAuth.authenticateApi(request, secure)
     const record = id === undefined ? undefined : this.peers.get(id)
@@ -141,12 +147,14 @@ export class HostConnectionService extends Service implements HostConnectionHand
     return new Peer(this.ctx, options)
   }
 
-  /** Claim API socket ownership synchronously; callers release on termination or failed upgrade. */
-  admitConnection(request: ConnectionTrustRequest): ConnectionAdmission {
-    const admission = this.admit(request)
+  /** Claim API socket ownership atomically after authentication; release on termination or failed upgrade. */
+  async admitConnection(request: ConnectionTrustRequest): Promise<ConnectionAdmission> {
+    const admission = await this.admit(request)
     if ('rejection' in admission) return admission
+    if (this.disposed) return { rejection: 401 }
     const record = this.peers.get(admission.peer.id)
-    if (record === undefined) return { ...admission, release: () => Promise.resolve() }
+    if (record === undefined) return admission.peer === this.browserPeer
+      ? { ...admission, release: () => Promise.resolve() } : { rejection: 401 }
     if (record.ownsSocket) return { rejection: 409 }
     record.ownsSocket = true
     let released: Promise<void> | undefined
@@ -164,6 +172,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
   private isTrusted(request: ConnectionTrustRequest): boolean {
     const carrier = this.owner.get('webServer')
     return isTrustedApiRequest(request, this.trustedHosts, carrier?.host, carrier?.protocol ?? 'http:')
+  }
+
+  /** Re-read disposal after asynchronous authentication. */
+  private isDisposed(): boolean {
+    return this.disposed
   }
 
   private publishPeer(interactions: ConnectionInteractions): PeerId {
@@ -190,8 +203,17 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /**
    * Authenticate an index request; native TLS listeners mint Secure cookies.
    */
-  authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
-    return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')
+  async authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): Promise<boolean> {
+    const secure = this.owner.get('webServer')?.protocol === 'https:'
+    const external = this.disposed ? false
+      : await this.owner.waterfall('connection/authenticate', request, () => Promise.resolve(undefined))
+    if (this.disposed || external === false) {
+      response.writeHead(401, { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' })
+      response.end(request.method === 'HEAD' ? undefined : 'dsh web authentication required\n')
+      return false
+    }
+    if (external === true && !this.browserAuth.hasApiCookie(request, secure)) return true
+    return this.browserAuth.authorizeIndex(request, response, secure)
   }
 
   /** Add this process's launch token to the clean application URL. */
@@ -261,7 +283,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
       kind: 'prefix',
       path: channel,
       handler: async (req, res) => {
-        const admission = this.admit(req)
+        const admission = await this.admit(req)
         if ('rejection' in admission) {
           res.writeHead(admission.rejection)
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')

@@ -146,8 +146,8 @@ class FakeConnectionService extends Service {
     }
   }
 
-  requestRejection(): undefined {
-    return undefined
+  requestRejection(): Promise<undefined> {
+    return Promise.resolve(undefined)
   }
 }
 
@@ -183,10 +183,10 @@ async function serveRoute(route: WebRoute): Promise<{ readonly origin: string; c
 }
 
 /** Exchange a Connection launch token without mounting the frontend fallback. */
-function browserCookie(connection: HostConnectionHandle, origin: string): string {
+async function browserCookie(connection: HostConnectionHandle, origin: string): Promise<string> {
   const target = new URL(connection.authenticatedUrl(origin))
   let setCookie: string | undefined
-  connection.authorizeIndex({
+  await connection.authorizeIndex({
     method: 'GET',
     url: `${target.pathname}${target.search}`,
     headers: { host: target.host },
@@ -1390,7 +1390,7 @@ describe('TypertGatewayService', () => {
     const apiRoute = routes.find(route => route.path === '/api')
     if (apiRoute === undefined) throw new Error('fixture API route was not installed')
     const server = await serveRoute(apiRoute)
-    const cookie = browserCookie(ctx.connection, server.origin)
+    const cookie = await browserCookie(ctx.connection, server.origin)
 
     try {
       const response = await fetch(`${server.origin}/api/goals/create`, {

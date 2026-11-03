@@ -12,6 +12,9 @@ describe('createLayoutStore', () => {
     const { store } = createLayoutStore().create()
     expect(store.getSnapshot()).toEqual({
       panelInfo: { activePanelId: null },
+      presentation: { embedded: false, ready: true, scope: 'native', preferences: { native: 'auto', inline: 'auto', fullscreen: 'auto' } },
+      webViewMounted: false,
+      webActionError: null,
       layoutInfo: {
         sidebar: 280,
         viewportWidth: 1920,
