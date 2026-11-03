@@ -31,6 +31,8 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { collectSourcePackageUses } from './verify-client-packages.ts'
+import { markdownFences } from './markdown.ts'
 
 const root = resolve(import.meta.dirname, '..')
 
@@ -98,6 +100,29 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   { file: 'apps/cli/tests/profiles/web/tests/fixtures/creator-plugin-manager.mjs', upstream: ['cordis'] },
   { file: 'apps/web/tests/agent-preset-authoring.e2e.ts', upstream: ['cordis'] },
   { file: 'packages/preset/agent-preset-registry/tests/session.spec.ts', upstream: ['cordis'] },
+  { file: 'apps/cli/tests/optional-bundle-transitions.e2e.ts', upstream: ['cordis'] },
+  { file: 'apps/web/tests/agent-preset-selection.e2e.ts', upstream: ['cordis'] },
+  { file: 'apps/web/tests/developer-tools-settings.e2e.ts', upstream: ['cordis'] },
+  { file: 'docs/subsystems/schedule.md', upstream: ['cordis'] },
+  { file: 'docs/subsystems/schedule.zh.md', upstream: ['cordis'] },
+  { file: 'docs/upgrade-guide/v0.2.0-rc.2/schedule-bundle-retired/guide.md', upstream: ['cordis'] },
+  { file: 'docs/upgrade-guide/v0.2.0-rc.2/schedule-bundle-retired/guide.zh.md', upstream: ['cordis'] },
+  { file: 'docs/upgrade-guide/v0.2.1-alpha.1/subagent-preset-composition/guide.md', upstream: ['cordis'] },
+  { file: 'docs/upgrade-guide/v0.2.1-alpha.1/subagent-preset-composition/guide.zh.md', upstream: ['cordis'] },
+  { file: 'docs/user/guide/schedule.md', upstream: ['cordis'] },
+  { file: 'docs/user/guide/schedule.zh.md', upstream: ['cordis'] },
+  { file: 'packages/bundle/web-app/cordis.patch.yml', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/src/client/CreatePluginMenuItem.tsx', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/src/client/analytics.ts', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/tests/analytics.client.spec.ts', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/tests/components.client.spec.tsx', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/tests/create-plugin-menu-item.client.spec.tsx', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/tests/section-store.client.spec.ts', upstream: ['cordis'] },
+  { file: 'packages/client/ui-conversation/src/client/input/submission-analytics.ts', upstream: ['cordis'] },
+  { file: 'packages/client/ui-conversation/tests/service-orchestration.client.spec.ts', upstream: ['cordis'] },
+  { file: 'packages/client/ui-entry-customization/src/client/index.ts', upstream: ['cordis'] },
+  { file: 'packages/client/ui-entry-customization/tests/menu.client.spec.tsx', upstream: ['cordis'] },
+  { file: 'packages/client/ui-workspace/tests/workspaces-service.client.spec.ts', upstream: ['cordis'] },
   // The preset-roster loop names the `cordis` preset id, not a package.
   { file: 'apps/cli/tests/windows-shell.spec.ts', upstream: ['cordis'] },
   // GROUP_ORDER holds `packages/<group>/` directory names, not package names.
@@ -118,12 +143,15 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   { file: 'packages/extensions/cordis-host-runner/src/inspect-registry.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/cordis-host-runner/src/types.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/cordis-host-runner/tests/helpers.ts', upstream: ['cordis'] },
+  { file: 'packages/extensions/cordis-host-runner/tests/inspect-registry.spec.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/cordis-host-runner/tests/runner.spec.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/cordis-host-runner/tests/versioning.spec.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/tool-cordis/src/api-catalog.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/tool-cordis/src/providers.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/ui-cordis/src/client/index.ts', upstream: ['cordis'] },
   { file: 'packages/extensions/ui-cordis/src/client/inventory.ts', upstream: ['cordis'] },
+  { file: 'snapshots/session/cordis-inspect-liveness/client-fixture.mjs', upstream: ['cordis'] },
+  { file: 'snapshots/session/cordis-inspect-timeout/client-fixture.mjs', upstream: ['cordis'] },
   // `cordis/tree` is an Inspector observation topic, not a package subpath.
   { file: 'packages/experimental/inspector/src/shared/bridge/messages/cordis.ts', upstream: ['cordis'] },
   { file: 'packages/experimental/inspector/tests/cordis-query.host.spec.ts', upstream: ['cordis'] },
@@ -306,7 +334,7 @@ const VENDORED_LIBRARY = /^@deepseek-ai\\/(cosmokit|schemastery)(\\/|$)/
     expect: 1,
   },
   {
-    // The real package references in files whose other `cordis` strings are preset ids.
+    // Real package references in files whose other name strings are product or runtime identifiers.
     id: 'agent-preset-spec-framework-import',
     file: 'packages/client/ui-agent-preset/tests/apply.client.spec.ts',
     find: "import { Context } from 'cordis'",
@@ -318,6 +346,188 @@ const VENDORED_LIBRARY = /^@deepseek-ai\\/(cosmokit|schemastery)(\\/|$)/
     file: 'apps/cli/tests/web-agent-presets.e2e.ts',
     find: "import { Context } from 'cordis'",
     replace: "import { Context } from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'optional-bundle-transitions-framework-import',
+    file: 'apps/cli/tests/optional-bundle-transitions.e2e.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'submission-analytics-framework-import',
+    file: 'packages/client/ui-conversation/src/client/input/submission-analytics.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'conversation-orchestration-framework-import',
+    file: 'packages/client/ui-conversation/tests/service-orchestration.client.spec.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'entry-customization-framework-import',
+    file: 'packages/client/ui-entry-customization/src/client/index.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'entry-customization-menu-framework-import',
+    file: 'packages/client/ui-entry-customization/tests/menu.client.spec.tsx',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'workspaces-service-framework-import',
+    file: 'packages/client/ui-workspace/tests/workspaces-service.client.spec.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'inspect-registry-framework-imports',
+    file: 'packages/extensions/cordis-host-runner/tests/inspect-registry.spec.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 2,
+  },
+  {
+    id: 'inspect-liveness-framework-type',
+    file: 'snapshots/session/cordis-inspect-liveness/client-fixture.mjs',
+    find: "import('cordis')",
+    replace: "import('@deepseek-ai/cordis')",
+    expect: 1,
+  },
+  {
+    id: 'inspect-timeout-framework-types',
+    file: 'snapshots/session/cordis-inspect-timeout/client-fixture.mjs',
+    find: "import('cordis')",
+    replace: "import('@deepseek-ai/cordis')",
+    expect: 2,
+  },
+  {
+    id: 'config-schema-spec-framework-import',
+    file: 'packages/boot/app-boot/tests/config-schema.spec.ts',
+    find: "from 'schemastery'",
+    replace: "from '@deepseek-ai/schemastery'",
+    expect: 1,
+  },
+  {
+    id: 'agent-preset-client-framework-import',
+    file: 'packages/client/ui-agent-preset/src/client/index.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'client-runner-framework-import',
+    file: 'packages/extensions/cordis-client-runner/src/client/index.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'client-runner-framework-augmentation',
+    file: 'packages/extensions/cordis-client-runner/src/client/index.ts',
+    find: "declare module 'cordis'",
+    replace: "declare module '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'client-runner-runtime-framework-import',
+    file: 'packages/extensions/cordis-client-runner/src/client/runtime.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'client-runner-spec-framework-import',
+    file: 'packages/extensions/cordis-client-runner/tests/plugin.client.spec.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'host-runner-framework-imports',
+    file: 'packages/extensions/cordis-host-runner/src/index.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 2,
+  },
+  {
+    id: 'host-runner-framework-augmentation',
+    file: 'packages/extensions/cordis-host-runner/src/index.ts',
+    find: "declare module 'cordis'",
+    replace: "declare module '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'inspect-registry-runtime-framework-imports',
+    file: 'packages/extensions/cordis-host-runner/src/inspect-registry.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 2,
+  },
+  {
+    id: 'inspect-registry-framework-augmentation',
+    file: 'packages/extensions/cordis-host-runner/src/inspect-registry.ts',
+    find: "declare module 'cordis'",
+    replace: "declare module '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'host-runner-types-framework-augmentation',
+    file: 'packages/extensions/cordis-host-runner/src/types.ts',
+    find: "declare module 'cordis'",
+    replace: "declare module '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'host-runner-helpers-framework-import',
+    file: 'packages/extensions/cordis-host-runner/tests/helpers.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'cordis-providers-framework-import',
+    file: 'packages/extensions/tool-cordis/src/providers.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'cordis-ui-framework-import',
+    file: 'packages/extensions/ui-cordis/src/client/index.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'inspector-query-spec-framework-import',
+    file: 'packages/experimental/inspector/tests/cordis-query.host.spec.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'inspector-tree-spec-framework-import',
+    file: 'packages/experimental/inspector/tests/cordis-tree.host.spec.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
+    expect: 1,
+  },
+  {
+    id: 'inspector-client-spec-framework-import',
+    file: 'packages/experimental/inspector/tests/plugin.client.spec.ts',
+    find: "from 'cordis'",
+    replace: "from '@deepseek-ai/cordis'",
     expect: 1,
   },
   {
@@ -431,7 +641,7 @@ const VENDORED_LIBRARY = /^@deepseek-ai\\/(cosmokit|schemastery)(\\/|$)/
  * @returns Whether the codemod must preserve the file without scanning its tokens.
  */
 export function isRescopeExcluded(file: string): boolean {
-  if (file === 'scripts/rescope-vendor.ts') return true // the mapping itself
+  if (file === 'scripts/rescope-vendor.ts' || file === 'scripts/rescope-vendor.spec.ts') return true // mapping and regression fixtures
   if (file.startsWith('.agents/notes/')) return true // notes record what was true when written
   // Recorded model payloads quote documentation verbatim, so they must mirror the
   // sources on disk — including the notes this rescope leaves alone.
@@ -478,6 +688,22 @@ function skipped(file: string, pattern: Pattern): boolean {
   return GENERIC_SKIPS.some(skip => skip.file === file && skip.upstream.includes(pattern.upstream))
 }
 
+/**
+ * Find real package imports that a product-identifier exception would otherwise hide.
+ * @param text - Source after any planned exact replacements.
+ * @param file - Repository-relative path selecting its identifier exceptions and parser mode.
+ * @param reverse - Inspect remaining scoped imports when reversing; omission checks upstream names.
+ * @returns Package names that need an exact edit before this file can be accepted.
+ */
+export function unmappedPackageImports(text: string, file: string, reverse = false): string[] {
+  const protectedNames = patterns(reverse).filter(pattern => skipped(file, pattern))
+  if (protectedNames.length === 0) return []
+  const imports = file.endsWith('.md')
+    ? new Set(markdownFences(text).flatMap(fence => [...collectSourcePackageUses(`${file}.ts`, fence.code, true)]))
+    : /\.[cm]?[jt]sx?$/.test(file) ? collectSourcePackageUses(file, text, true) : new Set<string>()
+  return protectedNames.filter(pattern => imports.has(pattern.from)).map(pattern => pattern.from)
+}
+
 function rewriteLine(line: string, file: string, all: readonly Pattern[]): string {
   let out = line
   for (const pattern of all) {
@@ -498,8 +724,16 @@ function rewriteLine(line: string, file: string, all: readonly Pattern[]): strin
  * prose is a record of what was true when it was written, and the same spelling
  * can mean something else entirely — the Python SDK's `cordis` option, or the
  * unvendored `@cordisjs/plugin-http`.
+ * @param text - Complete source text whose eligible package-name tokens are rewritten.
+ * @param file - Repository-relative path used for prose and product-identifier exceptions.
+ * @param all - Directional mappings; omission uses the forward rescope mapping.
+ * @returns Rewritten text and the number of changed physical lines.
  */
-function rewrite(text: string, file: string, all: readonly Pattern[]): { text: string; lines: number } {
+export function rewriteRescopeSource(
+  text: string,
+  file: string,
+  all: readonly Pattern[] = patterns(false),
+): { text: string; lines: number } {
   const markdown = file.endsWith('.md')
   const prose = markdown && file.startsWith('docs/')
   let insideFence = false
@@ -596,6 +830,19 @@ function main(): void {
     }
     if (state === 'pending') planned.push({ edit, path, find, replace })
   }
+  if (failures.length === 0) {
+    // Identifier exceptions never exempt new module imports; inspect the planned state before writing.
+    for (const file of new Set(GENERIC_SKIPS.map(skip => skip.file))) {
+      if (!files.includes(file)) continue
+      let proposed = readFileSync(resolve(root, file), 'utf8')
+      for (const { edit, find, replace } of planned) {
+        if (edit.file === file) proposed = proposed.split(find).join(replace)
+      }
+      for (const name of unmappedPackageImports(proposed, file, reverse)) {
+        failures.push(`unmapped package import ${name} in ${file}; add an exact edit`)
+      }
+    }
+  }
   if (failures.length > 0) {
     for (const failure of failures) console.error(`rescope-vendor: ${failure}`)
     console.error(`rescope-vendor: ${String(failures.length)} problem(s); nothing was written.`)
@@ -613,7 +860,7 @@ function main(): void {
   for (const file of files) {
     const path = resolve(root, file)
     const before = readFileSync(path, 'utf8')
-    const { text: after, lines } = rewrite(before, file, all)
+    const { text: after, lines } = rewriteRescopeSource(before, file, all)
     if (after === before) continue
     outstanding.push(file)
     const kind = classify(file)

@@ -76,6 +76,20 @@ function facts(
 }
 
 describe('source package uses', () => {
+  it('includes JSDoc package references only when explicitly requested', () => {
+    const source = [
+      '/** @type {import("@deepseek-ai/cordis").Context} */',
+      'let context;',
+      '/** @import { Schema } from "@deepseek-ai/schemastery" */',
+      'const schema = {};',
+    ].join('\n')
+    expect([...collectSourcePackageUses('feature.mjs', source)]).toEqual([])
+    expect([...collectSourcePackageUses('feature.mjs', source, true)].sort()).toEqual([
+      '@deepseek-ai/cordis', '@deepseek-ai/schemastery',
+    ])
+    expect([...collectRuntimeSourcePackageUses('feature.mjs', source)]).toEqual([])
+  })
+
   it('includes root-relative runtime requests only when explicitly requested', () => {
     const source = [
       "import './local.ts'",
