@@ -29,10 +29,10 @@
  * itself back over whoever came after it. The three slots are separate for the same reason — a restored
  * copy pushed onto the folding stack could unwind another boundary's entry.
  *
- * A snapshot with no stores or explicit hook overlays is `undefined`, and the hook
- * layer then wraps nothing: an unscoped callback keeps inheriting the enclosing
- * boundary. An explicit empty overlay, including a root dispatch, stays captured
- * so its later callbacks cannot inherit an unrelated boundary. `__snapshotAll` is
+ * A snapshot with no stores, hook overlays, or resumed context is `undefined`, and
+ * the hook layer then wraps nothing: an unscoped callback keeps inheriting the
+ * enclosing boundary. Explicit empty overlays and resumed slots stay captured
+ * so their later callbacks cannot inherit an unrelated boundary. `__snapshotAll` is
  * the transformer-facing counterpart and always captures every instance, including
  * the ones reading `undefined`, because a resumed frame must see exactly what it
  * saw at its pause point.
@@ -208,15 +208,15 @@ export class AsyncLocalStorage<T> {
   }
 
   /**
-   * Copy current stores and explicit hook overlays. Not part of the Node face:
-   * this is the shim's own mechanism, kept in the class so the overlay stays private.
-   * @returns the snapshot, or undefined when no instance has a store or overlay.
+   * Copy current stores and explicitly restored contexts. Not part of the Node face:
+   * this is the shim's own mechanism, kept in the class so its slots stay private.
+   * @returns the snapshot, or undefined when no instance has a store, overlay, or resumed context.
    */
   static captureContext(): AsyncContextSnapshot | undefined {
     let captured: CapturedStore[] | undefined
     for (const instance of instances) {
       const store = instance.getStore()
-      if (store === undefined && instance.overlay === undefined) continue
+      if (store === undefined && instance.overlay === undefined && instance.resumed === undefined) continue
       captured ??= []
       captured.push({ instance, store })
     }
@@ -284,8 +284,8 @@ export type AsyncContextSnapshot = readonly CapturedStore[]
 export type AmbientSnapshot = readonly CapturedStore[]
 
 /**
- * Copy current stores and explicit hook overlays, including empty root overlays.
- * @returns the snapshot, or undefined when no instance has a store or overlay
+ * Copy current stores and explicitly restored contexts, including empty roots.
+ * @returns the snapshot, or undefined when no instance has a store, overlay, or resumed context
  * (the hook layer then wraps nothing and callbacks inherit the stack top).
  */
 export function captureAsyncContext(): AsyncContextSnapshot | undefined {

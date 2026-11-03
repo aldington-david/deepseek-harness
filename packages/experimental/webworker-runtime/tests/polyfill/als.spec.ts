@@ -90,4 +90,16 @@ describe('causality faces', () => {
       expect(als.getStore()).toBe('caller')
     })
   })
+
+  it('keeps an empty resumed context when binding a later callback', () => {
+    const als = new AsyncLocalStorage<string>()
+    const snapshot = runAtAsyncContextRoot(() => alsCausality.snapshot())
+    alsCausality.restore(snapshot)
+    const resumed = AsyncLocalStorage.bind(() => als.getStore())
+    als.run('caller', () => {
+      expect(resumed()).toBeUndefined()
+      expect(als.getStore()).toBe('caller')
+    })
+    als.disable()
+  })
 })
